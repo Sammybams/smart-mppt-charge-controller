@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import os
 from dataclasses import dataclass
 from functools import lru_cache
 from pathlib import Path
@@ -9,10 +10,12 @@ from pathlib import Path
 import joblib
 import pandas as pd
 
-from smart_mppt.dataset import PROJECT_ROOT
 
-
-DEFAULT_MODEL_PATH = PROJECT_ROOT / "models" / "smart_mppt.joblib"
+def default_model_path() -> Path:
+    configured = os.environ.get("SMART_MPPT_MODEL_PATH")
+    if configured:
+        return Path(configured).expanduser().resolve()
+    return Path.cwd() / "models" / "smart_mppt.joblib"
 
 
 @dataclass(frozen=True)
@@ -45,7 +48,9 @@ class Prediction:
 class MPPPredictor:
     """Inference wrapper around the packaged UCP-trained estimator."""
 
-    def __init__(self, model_path: Path = DEFAULT_MODEL_PATH) -> None:
+    def __init__(self, model_path: Path | None = None) -> None:
+        if model_path is None:
+            model_path = default_model_path()
         if not model_path.exists():
             raise FileNotFoundError(
                 f"Model artifact not found at {model_path}. "
@@ -93,4 +98,3 @@ class MPPPredictor:
 @lru_cache(maxsize=1)
 def get_predictor() -> MPPPredictor:
     return MPPPredictor()
-
