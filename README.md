@@ -7,6 +7,20 @@ should move before searching locally to the left and right.
 The packaged model is trained from the public UCP photovoltaic I-V curve
 dataset and supports both uniform irradiance and partial-shading examples.
 
+This repository implements the original requested contract end to end:
+
+1. The device sends sun intensity, panel voltage, panel current, ambient
+   temperature, and time of day once at startup.
+2. The API transforms those values into the model's five numeric features.
+3. The trained model predicts the voltage and current of the global maximum
+   power point.
+4. The API returns the predicted voltage, current, and their power product.
+
+The full account of the source data, target construction, preprocessing,
+augmentation, train/test split, estimator, evaluation, saved artifact, and
+runtime inference path is in
+[`docs/TRAINING_PIPELINE.md`](docs/TRAINING_PIPELINE.md).
+
 ## Request and response
 
 Send:
@@ -112,11 +126,12 @@ python scripts/prepare_dataset.py
 python scripts/train_model.py
 ```
 
-Training converts each published curve into examples with exactly the five API
+At a high level, training converts 341 uniform-irradiance curves and 155
+partial-shading curves into 14,725 startup examples with exactly the five API
 inputs. For partial-shading curves, the published local peak with the greatest
-power becomes the global MPP target. Because UCP does not contain time of day,
-representative startup times are label-preserving augmentation: the time
-changes while the physical curve and its target remain the same.
+power becomes the global MPP target. The detailed derivation, including every
+selected operating point and all filtering rules, is documented in
+[`docs/TRAINING_PIPELINE.md`](docs/TRAINING_PIPELINE.md).
 
 The committed training report is in
 [`models/training_report.json`](models/training_report.json). Its group-based
@@ -125,6 +140,11 @@ holdout keeps complete source curves together and reports:
 - MPP voltage MAE: 0.563 V
 - MPP current MAE: 0.022 A
 - Maximum power MAE: 4.696 W
+
+The final model is refitted on all 14,725 prepared rows after holdout
+evaluation and committed as
+[`models/smart_mppt.joblib`](models/smart_mppt.joblib), so normal API startup
+does not download data or train a model.
 
 ## Test
 
