@@ -9,6 +9,4 @@ __pycache__/
 # Reproducible generated/downloaded artifacts
 data/raw/
 data/processed/
-models/*.joblib
-models/*.json
-
+models/*.tmp
