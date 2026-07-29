@@ -1,0 +1,35 @@
+[build-system]
+requires = ["setuptools>=68", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "smart-mppt"
+version = "0.1.0"
+description = "Startup maximum power point prediction for a smart MPPT charge controller"
+requires-python = ">=3.11"
+dependencies = [
+  "fastapi>=0.112,<1",
+  "joblib>=1.2,<2",
+  "numpy>=1.24,<3",
+  "pandas>=2,<3",
+  "pydantic>=2.8,<3",
+  "scikit-learn>=1.3,<2",
+  "uvicorn>=0.30,<1",
+]
+
+[project.optional-dependencies]
+dev = [
+  "httpx>=0.27,<1",
+  "pytest>=7.4,<9",
+]
+
+[project.scripts]
+smart-mppt-train = "smart_mppt.training:main"
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.pytest.ini_options]
+pythonpath = ["src"]
+testpaths = ["tests"]
+

@@ -1,0 +1,14 @@
+.DS_Store
+.pytest_cache/
+.ruff_cache/
+.venv/
+__pycache__/
+*.egg-info/
+*.py[cod]
+
+# Reproducible generated/downloaded artifacts
+data/raw/
+data/processed/
+models/*.joblib
+models/*.json
+
