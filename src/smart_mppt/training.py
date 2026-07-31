@@ -23,6 +23,7 @@ from smart_mppt.augmentation import (
 )
 from smart_mppt.dataset import PROJECT_ROOT, file_sha256
 from smart_mppt.manual_dataset import DEFAULT_DATASET_PATH, prepare_manual_dataset
+from smart_mppt.panel import PANEL
 
 
 MODEL_DIRECTORY = PROJECT_ROOT / "models"
@@ -54,6 +55,7 @@ TARGET_COLUMNS = ["max_power_voltage_v", "max_power_current_a"]
 RANDOM_SEED = 42
 CURRENT_PHYSICS_BLEND = 0.20
 CURRENT_DARK_GATE_LUX = 250.0
+VOLTAGE_CALIBRATION_BRIGHT_QUANTILE = 0.75
 
 
 def _build_voltage_model() -> RandomForestRegressor:
@@ -126,12 +128,46 @@ def _metrics(actual: np.ndarray, predicted: np.ndarray) -> dict[str, float]:
     }
 
 
+def _calibrate_voltage_labels(
+    local: pd.DataFrame,
+) -> tuple[pd.DataFrame, dict[str, float | str]]:
+    calibrated = local.copy()
+    bright_threshold = float(
+        calibrated["light_lux"].quantile(VOLTAGE_CALIBRATION_BRIGHT_QUANTILE)
+    )
+    bright = calibrated[calibrated["light_lux"] >= bright_threshold]
+    observed_bright_median = float(bright[TARGET_COLUMNS[0]].median())
+    factor = PANEL.maximum_power_voltage_v / observed_bright_median
+    calibrated["raw_max_power_voltage_v"] = calibrated[TARGET_COLUMNS[0]]
+    calibrated[TARGET_COLUMNS[0]] = (
+        calibrated[TARGET_COLUMNS[0]] * factor
+    ).clip(0, PANEL.open_circuit_voltage_v)
+    calibrated["max_power_w"] = (
+        calibrated[TARGET_COLUMNS[0]] * calibrated[TARGET_COLUMNS[1]]
+    )
+    details: dict[str, float | str] = {
+        "policy": "Scale all field voltage labels so the median of the brightest quartile equals nameplate Vmp, then cap at nameplate Voc.",
+        "bright_lux_quantile": VOLTAGE_CALIBRATION_BRIGHT_QUANTILE,
+        "bright_lux_threshold": bright_threshold,
+        "observed_bright_voltage_median_v": observed_bright_median,
+        "nameplate_vmp_v": PANEL.maximum_power_voltage_v,
+        "nameplate_voc_v": PANEL.open_circuit_voltage_v,
+        "scale_factor": float(factor),
+        "raw_rows_above_nameplate_voc": int(
+            (local[TARGET_COLUMNS[0]] > PANEL.open_circuit_voltage_v).sum()
+        ),
+    }
+    return calibrated, details
+
+
 def _evaluate_field_days(
     local: pd.DataFrame, augmented: pd.DataFrame
 ) -> tuple[dict[str, float], list[dict[str, object]]]:
     actual_parts: list[np.ndarray] = []
     predicted_parts: list[np.ndarray] = []
     fold_metrics: list[dict[str, object]] = []
+    raw_voltage_parts: list[np.ndarray] = []
+    predicted_voltage_parts: list[np.ndarray] = []
     for training_index, testing_index in LeaveOneGroupOut().split(
         local, groups=local["collection_date"]
     ):
@@ -149,14 +185,30 @@ def _evaluate_field_days(
         actual = testing[TARGET_COLUMNS].to_numpy()
         actual_parts.append(actual)
         predicted_parts.append(predicted)
+        raw_voltage = testing["raw_max_power_voltage_v"].to_numpy()
+        raw_voltage_parts.append(raw_voltage)
+        predicted_voltage_parts.append(predicted[:, 0])
         fold_metrics.append(
             {
                 "held_out_date": str(testing["collection_date"].iloc[0]),
                 "rows": int(len(testing)),
                 **_metrics(actual, predicted),
+                "raw_uncalibrated_voltage_mae_v": round(
+                    float(mean_absolute_error(raw_voltage, predicted[:, 0])), 6
+                ),
             }
         )
-    return _metrics(np.vstack(actual_parts), np.vstack(predicted_parts)), fold_metrics
+    overall = _metrics(np.vstack(actual_parts), np.vstack(predicted_parts))
+    overall["raw_uncalibrated_voltage_mae_v"] = round(
+        float(
+            mean_absolute_error(
+                np.concatenate(raw_voltage_parts),
+                np.concatenate(predicted_voltage_parts),
+            )
+        ),
+        6,
+    )
+    return overall, fold_metrics
 
 
 def _evaluate_augmented_current(
@@ -223,7 +275,8 @@ def train(
     if not augmented_path.exists():
         augmented_path, _ = prepare_augmented_dataset(dataset_path=augmented_path)
 
-    local = pd.read_csv(dataset_path)
+    raw_local = pd.read_csv(dataset_path)
+    local, voltage_calibration = _calibrate_voltage_labels(raw_local)
     augmented = pd.read_csv(augmented_path)
     field_metrics, fold_metrics = _evaluate_field_days(local, augmented)
     augmented_metrics = _evaluate_augmented_current(local, augmented)
@@ -235,7 +288,7 @@ def train(
     collected_ranges, supported_ranges = _input_ranges(local)
 
     artifact = {
-        "artifact_version": 3,
+        "artifact_version": 4,
         "voltage_model": voltage_model,
         "current_model": current_model,
         "voltage_feature_columns": VOLTAGE_FEATURE_COLUMNS,
@@ -248,6 +301,8 @@ def train(
         "supported_ranges": supported_ranges,
         "timezone": "Africa/Lagos",
         "panel_rating_w": 30.0,
+        "panel_specifications": PANEL.as_dict(),
+        "voltage_label_calibration": voltage_calibration,
         "light_unit": "lux",
         "dataset": "Hybrid Lagos field + lux-domain 30 W physics model",
         "output_constraints": {
@@ -262,7 +317,7 @@ def train(
     temporary_model.replace(model_path)
 
     report: dict[str, object] = {
-        "artifact_version": 3,
+        "artifact_version": 4,
         "model_type": {
             "voltage": "RandomForestRegressor trained on Lagos field labels",
             "current": "20% monotonic physics model blended with an 80% Lagos median anchor and a low-light gate",
@@ -277,6 +332,8 @@ def train(
         "current_local_anchor_a": current_anchor_a,
         "current_physics_blend": CURRENT_PHYSICS_BLEND,
         "current_dark_gate_lux": CURRENT_DARK_GATE_LUX,
+        "panel_specifications": PANEL.as_dict(),
+        "voltage_label_calibration": voltage_calibration,
         "collection_days": int(local["collection_date"].nunique()),
         "collection_dates": sorted(local["collection_date"].unique().tolist()),
         "field_split_policy": "Leave one complete Lagos collection date out per fold",
@@ -290,13 +347,13 @@ def train(
         "held_out_augmented_current_metrics": augmented_metrics,
         "output_constraints": artifact["output_constraints"],
         "interpretation": {
-            "field_metrics": "Agreement with the supplied Lagos labels on unseen dates.",
+            "field_metrics": "Agreement with datasheet-calibrated Lagos labels on unseen dates. Raw uncalibrated voltage MAE is also reported.",
             "augmented_metrics": "Agreement with held-out physics-guided current labels; this is not a real-world accuracy claim.",
             "prediction": "Expected MPP starting point for a short controller verification search, not proof of the global peak from one lux sensor.",
         },
         "known_limitations": [
             "Only four independent Lagos collection dates are available.",
-            "The exact 30 W panel datasheet is unavailable, so synthetic electrical limits are explicit surrogate assumptions.",
+            "The supplied voltage labels require a global scale calibration because many exceed nameplate Voc.",
             "The local current labels have no validated feature relationship and conflict with low-light photovoltaic behavior.",
             "One ambient-light sensor cannot identify the spatial shape of partial shade.",
         ],

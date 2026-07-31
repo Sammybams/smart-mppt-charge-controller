@@ -17,7 +17,7 @@ def test_training_uses_day_isolated_validation(tmp_path) -> None:
     )
     artifact = joblib.load(model_path)
 
-    assert artifact["artifact_version"] == 3
+    assert artifact["artifact_version"] == 4
     assert artifact["panel_rating_w"] == 30
     assert artifact["light_unit"] == "lux"
     assert report["field_split_policy"] == (
@@ -29,6 +29,10 @@ def test_training_uses_day_isolated_validation(tmp_path) -> None:
     assert report["augmented_training_rows"] == 2_000
     assert "physics model" in report["model_type"]["current"]
     assert artifact["current_physics_blend"] == 0.2
+    assert artifact["panel_specifications"]["model"] == "AP-PM-30W"
+    calibration = artifact["voltage_label_calibration"]
+    assert calibration["raw_rows_above_nameplate_voc"] == 7_785
+    assert 0.79 < calibration["scale_factor"] < 0.81
     assert artifact["output_constraints"] == {
         "maximum_voltage_v": 23.16,
         "maximum_current_a": 1.67,
