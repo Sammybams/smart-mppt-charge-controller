@@ -300,11 +300,11 @@ def train(
         "collected_ranges": collected_ranges,
         "supported_ranges": supported_ranges,
         "timezone": "Africa/Lagos",
-        "panel_rating_w": 30.0,
+        "panel_rating_w": PANEL.maximum_power_w,
         "panel_specifications": PANEL.as_dict(),
         "voltage_label_calibration": voltage_calibration,
         "light_unit": "lux",
-        "dataset": "Hybrid Lagos field + lux-domain 30 W physics model",
+        "dataset": "Sunshine Solar AP-PM-30W hybrid Lagos model",
         "output_constraints": {
             "maximum_voltage_v": PANEL_VOC_V,
             "maximum_current_a": PANEL_ISC_A,

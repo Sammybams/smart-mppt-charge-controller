@@ -61,7 +61,7 @@ class MPPPredictor:
                 f"Model artifact not found at {model_path}. Run scripts/train_model.py."
             )
         artifact = joblib.load(model_path)
-        if artifact.get("artifact_version") != 3:
+        if artifact.get("artifact_version") != 4:
             raise ValueError(
                 "Unsupported model artifact version; retrain with scripts/train_model.py"
             )
@@ -81,6 +81,12 @@ class MPPPredictor:
         ]
         self.dataset: str = artifact["dataset"]
         self.panel_rating_w: float = artifact["panel_rating_w"]
+        self.panel_specifications: dict[str, str | float] = artifact[
+            "panel_specifications"
+        ]
+        self.voltage_label_calibration: dict[str, str | float] = artifact[
+            "voltage_label_calibration"
+        ]
         self.output_constraints: dict[str, float] = artifact["output_constraints"]
         self.current_local_anchor_a: float = artifact["current_local_anchor_a"]
         self.current_physics_blend: float = artifact["current_physics_blend"]

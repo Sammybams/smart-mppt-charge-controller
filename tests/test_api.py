@@ -16,8 +16,8 @@ def test_health_loads_packaged_model() -> None:
     assert response.status_code == 200
     assert response.json() == {
         "status": "ok",
-        "version": "0.3.0",
-        "model": "Hybrid Lagos field + lux-domain 30 W physics model",
+        "version": "0.4.0",
+        "model": "Sunshine Solar AP-PM-30W hybrid Lagos model",
     }
 
 

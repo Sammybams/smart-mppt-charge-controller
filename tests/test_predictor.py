@@ -27,8 +27,8 @@ def test_current_changes_with_lux_and_outputs_are_bounded() -> None:
 
     assert high.current > low.current * 3
     assert high.power <= 33
-    assert high.voltage <= 26.5
-    assert high.current <= 1.35
+    assert high.voltage <= 23.16
+    assert high.current <= 1.67
 
 
 def test_naive_timestamp_is_interpreted_as_lagos_time() -> None:

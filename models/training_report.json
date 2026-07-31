@@ -1,19 +1,47 @@
 {
-  "artifact_version": 3,
+  "artifact_version": 4,
   "model_type": {
     "voltage": "RandomForestRegressor trained on Lagos field labels",
     "current": "20% monotonic physics model blended with an 80% Lagos median anchor and a low-light gate"
   },
   "random_seed": 42,
   "local_dataset_sha256": "ac2234deea2069a40659762d81cb78a365635b22a0d83861030fbc6eb05b3385",
-  "augmented_dataset_sha256": "552e84dffc49181a574e234e11d80be03aaa3a0b6438f177ba9994ef36a28553",
-  "model_sha256": "28047fb27de1a6f394c58a4962f67cbcaf2ff98087f36649cf6bc1ceb6e71bda",
+  "augmented_dataset_sha256": "207e0404c3945bab49b5e3d4351f8f029e915183d67cb946f1febae27f109610",
+  "model_sha256": "e8ee6fb1df6df777aa959d67f3b57dc95bf9e2f44c454ec742149fbb56c9776a",
   "scikit_learn_version": "1.3.0",
   "local_training_rows": 11581,
   "augmented_training_rows": 30000,
   "current_local_anchor_a": 1.15,
   "current_physics_blend": 0.2,
   "current_dark_gate_lux": 250.0,
+  "panel_specifications": {
+    "manufacturer": "Sunshine Solar",
+    "model": "AP-PM-30W",
+    "maximum_power_w": 30.0,
+    "maximum_power_voltage_v": 19.3,
+    "maximum_power_current_a": 1.56,
+    "open_circuit_voltage_v": 23.16,
+    "short_circuit_current_a": 1.67,
+    "maximum_system_voltage_v": 1500.0,
+    "maximum_series_fuse_a": 20.0,
+    "minimum_operating_temperature_c": -40.0,
+    "maximum_operating_temperature_c": 85.0,
+    "application_class": "Class A",
+    "stc_air_mass": 1.5,
+    "stc_irradiance_w_m2": 1000.0,
+    "stc_cell_temperature_c": 25.0,
+    "origin": "Lekki Free Zone, Nigeria"
+  },
+  "voltage_label_calibration": {
+    "policy": "Scale all field voltage labels so the median of the brightest quartile equals nameplate Vmp, then cap at nameplate Voc.",
+    "bright_lux_quantile": 0.75,
+    "bright_lux_threshold": 12470.83,
+    "observed_bright_voltage_median_v": 24.18,
+    "nameplate_vmp_v": 19.3,
+    "nameplate_voc_v": 23.16,
+    "scale_factor": 0.7981803143093467,
+    "raw_rows_above_nameplate_voc": 7785
+  },
   "collection_days": 4,
   "collection_dates": [
     "2026-06-22",
@@ -85,68 +113,73 @@
     }
   },
   "field_leave_one_day_out_metrics": {
-    "voltage_mae_v": 1.724923,
-    "voltage_r2": 0.777478,
-    "current_mae_a": 0.241653,
-    "current_r2": -1.256363,
-    "power_mae_w": 6.071972
+    "voltage_mae_v": 1.362625,
+    "voltage_r2": 0.776509,
+    "current_mae_a": 0.238208,
+    "current_r2": -1.196824,
+    "power_mae_w": 4.754252,
+    "raw_uncalibrated_voltage_mae_v": 5.467041
   },
   "field_per_day_metrics": [
     {
       "held_out_date": "2026-06-22",
       "rows": 15,
-      "voltage_mae_v": 7.838381,
-      "voltage_r2": -433.828755,
-      "current_mae_a": 1.130692,
-      "current_r2": -40.232963,
-      "power_mae_w": 13.136844
+      "voltage_mae_v": 6.26875,
+      "voltage_r2": -435.570305,
+      "current_mae_a": 1.130594,
+      "current_r2": -40.226202,
+      "power_mae_w": 10.487178,
+      "raw_uncalibrated_voltage_mae_v": 8.44921
     },
     {
       "held_out_date": "2026-06-23",
       "rows": 1572,
-      "voltage_mae_v": 1.40493,
-      "voltage_r2": 0.873022,
-      "current_mae_a": 0.280023,
-      "current_r2": -2.447846,
-      "power_mae_w": 4.827417
+      "voltage_mae_v": 1.280761,
+      "voltage_r2": 0.843996,
+      "current_mae_a": 0.277129,
+      "current_r2": -2.393364,
+      "power_mae_w": 3.833003,
+      "raw_uncalibrated_voltage_mae_v": 4.593091
     },
     {
       "held_out_date": "2026-07-21",
       "rows": 4089,
-      "voltage_mae_v": 1.12222,
-      "voltage_r2": 0.897829,
-      "current_mae_a": 0.217868,
-      "current_r2": -0.776135,
-      "power_mae_w": 4.674864
+      "voltage_mae_v": 0.820936,
+      "voltage_r2": 0.906082,
+      "current_mae_a": 0.211932,
+      "current_r2": -0.675289,
+      "power_mae_w": 3.569133,
+      "raw_uncalibrated_voltage_mae_v": 4.273378
     },
     {
       "held_out_date": "2026-07-22",
       "rows": 5905,
-      "voltage_mae_v": 2.21193,
-      "voltage_r2": -3.771505,
-      "current_mae_a": 0.245649,
-      "current_r2": -1.20401,
-      "power_mae_w": 7.352792
+      "voltage_mae_v": 1.747056,
+      "voltage_r2": -3.656884,
+      "current_mae_a": 0.243776,
+      "current_r2": -1.17108,
+      "power_mae_w": 5.805592,
+      "raw_uncalibrated_voltage_mae_v": 6.518693
     }
   ],
   "held_out_augmented_current_metrics": {
     "rows": 5965,
-    "current_mae_a": 0.037229,
-    "current_r2": 0.978546
+    "current_mae_a": 0.046475,
+    "current_r2": 0.978523
   },
   "output_constraints": {
-    "maximum_voltage_v": 26.5,
-    "maximum_current_a": 1.35,
+    "maximum_voltage_v": 23.16,
+    "maximum_current_a": 1.67,
     "maximum_power_w": 33.0
   },
   "interpretation": {
-    "field_metrics": "Agreement with the supplied Lagos labels on unseen dates.",
+    "field_metrics": "Agreement with datasheet-calibrated Lagos labels on unseen dates. Raw uncalibrated voltage MAE is also reported.",
     "augmented_metrics": "Agreement with held-out physics-guided current labels; this is not a real-world accuracy claim.",
     "prediction": "Expected MPP starting point for a short controller verification search, not proof of the global peak from one lux sensor."
   },
   "known_limitations": [
     "Only four independent Lagos collection dates are available.",
-    "The exact 30 W panel datasheet is unavailable, so synthetic electrical limits are explicit surrogate assumptions.",
+    "The supplied voltage labels require a global scale calibration because many exceed nameplate Voc.",
     "The local current labels have no validated feature relationship and conflict with low-light photovoltaic behavior.",
     "One ambient-light sensor cannot identify the spatial shape of partial shade."
   ]
