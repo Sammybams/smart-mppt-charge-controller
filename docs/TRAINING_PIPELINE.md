@@ -67,6 +67,24 @@ The result contains 11,581 rows.
 No real target is silently replaced, clipped, or deleted. Output limits are
 applied later when the API makes a prediction.
 
+### Voltage calibration from the panel label
+
+The Sunshine Solar AP-PM-30W label says Vmp is 19.3 V and Voc is 23.16 V.
+However, 7,785 prepared field voltage labels are above 23.16 V. The maximum is
+26.11 V, which cannot be the physical MPP voltage of this panel on the same
+voltage scale.
+
+The raw file remains unchanged. Before fitting voltage, training:
+
+1. takes the brightest 25% of the field readings;
+2. finds their median voltage, which is 24.18 V;
+3. calculates `19.3 / 24.18 = 0.7981803143`;
+4. multiplies every field voltage label by that factor; and
+5. caps calibrated labels at the 23.16 V nameplate Voc.
+
+This is one global sensor-scale correction. It is saved inside the model and
+training report.
+
 ## 4. Features made from lux and time
 
 The model receives the original lux and temperature. It also receives useful
@@ -124,20 +142,20 @@ Each example contains:
 The generator uses lux as the saved input. It does not change the deployed API
 to W/m2.
 
-Because the exact panel datasheet is missing, these surrogate values are used:
+The supplied panel label gives these exact nameplate values:
 
 | Assumption | Value |
 | --- | ---: |
 | Rated power | 30 W |
-| Nominal MPP voltage | 24.0 V |
-| Nominal MPP current | 1.25 A |
-| Open-circuit voltage limit | 26.5 V |
-| Short-circuit current limit | 1.35 A |
+| Nameplate MPP voltage | 19.3 V |
+| Nameplate MPP current | 1.56 A |
+| Open-circuit voltage limit | 23.16 V |
+| Short-circuit current limit | 1.67 A |
 | Maximum allowed generated power | 33 W |
 
-The voltage scale comes from the Lagos readings. Current is calculated from
-the 30 W rating. These values are written clearly in the generated metadata so
-they can be replaced when the panel datasheet is found.
+The panel is a Sunshine Solar AP-PM-30W made in the Lekki Free Zone, Nigeria.
+Only the temperature coefficients remain assumptions because they are not
+printed on the supplied label.
 
 The BH1750 input is varied by up to about 20% to make the model less dependent
 on one perfectly mounted sensor.
@@ -150,9 +168,9 @@ know the exact shadow shape from one lux value.
 
 ### Voltage
 
-Voltage uses a random forest with 40 trees. It is trained only on real Lagos
-voltage labels. Generated voltage does not overwrite what was measured from
-the actual panel.
+Voltage uses a random forest with 40 trees. It is trained on the calibrated
+Lagos voltage labels. Generated voltage does not replace the measured shape;
+the nameplate calibration only corrects its physical scale.
 
 ### Current
 
@@ -187,11 +205,12 @@ The latest results are:
 
 | Real Lagos check | Result |
 | --- | ---: |
-| Voltage MAE | 1.724923 V |
-| Voltage R2 | 0.777478 |
-| Current MAE | 0.241653 A |
-| Current R2 | -1.256363 |
-| Derived power MAE | 6.071972 W |
+| Calibrated voltage MAE | 1.362625 V |
+| Calibrated voltage R2 | 0.776509 |
+| Raw uncalibrated voltage MAE | 5.467041 V |
+| Current MAE | 0.238208 A |
+| Current R2 | -1.196824 |
+| Derived calibrated power MAE | 4.754252 W |
 
 The negative current R2 is important. It says the hybrid current does not
 match the questionable current column well on unseen days. That is expected
@@ -201,8 +220,8 @@ Twenty percent of generated current examples are also held out:
 
 | Generated-data check | Result |
 | --- | ---: |
-| Current MAE | 0.037229 A |
-| Current R2 | 0.978546 |
+| Current MAE | 0.046475 A |
+| Current R2 | 0.978523 |
 
 This proves that the code learned the generated rule. It does not prove the
 same accuracy on the physical panel.
@@ -225,8 +244,9 @@ models/smart_mppt.joblib
 models/training_report.json
 ```
 
-Artifact version 3 stores both models, feature order, supported input ranges,
-blend values, safety limits, timezone, panel rating, and dataset names.
+Artifact version 4 stores both models, feature order, supported input ranges,
+blend values, the complete panel nameplate, voltage calibration, safety limits,
+timezone, panel rating, and dataset names.
 
 Normal API startup loads this saved file. It does not train again.
 
@@ -241,8 +261,8 @@ For one `POST /predict` request:
 5. The generated-data model predicts a physics current.
 6. The physics current is blended with the 1.15 A Lagos anchor.
 7. The low-light gate reduces current when lux is very small.
-8. Voltage is limited to 26.5 V.
-9. Current is limited to 1.35 A.
+8. Voltage is limited to the 23.16 V nameplate Voc.
+9. Current is limited to the 1.67 A nameplate Isc.
 10. If voltage times current exceeds 33 W, current is reduced so power is 33 W.
 11. The API returns voltage, current, power, and warnings.
 
@@ -276,5 +296,6 @@ The most useful next data collection is a fast I-V sweep. For each sweep, save:
 - every voltage and current point; and
 - the voltage/current pair with the highest measured power.
 
-Also save the exact panel model and datasheet values. With enough complete
-days and real curve sweeps, the synthetic blend can be reduced or removed.
+Also record voltage and current with calibrated reference meters. With enough
+complete days and real curve sweeps, the global voltage correction and
+synthetic current blend can be reduced or removed.

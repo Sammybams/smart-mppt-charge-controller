@@ -45,23 +45,24 @@ The generator varies:
 It calculates expected MPP voltage and current for each case. Maximum generated
 power is 33 W.
 
-## Panel assumptions
+## Panel values
 
-The exact panel datasheet has not been supplied. The generator currently uses:
+The generator uses the supplied Sunshine Solar AP-PM-30W nameplate:
 
 | Value | Assumption |
 | --- | ---: |
 | Rated power | 30 W |
-| MPP voltage | 24.0 V |
-| MPP current | 1.25 A |
-| Open-circuit voltage | 26.5 V |
-| Short-circuit current | 1.35 A |
+| MPP voltage | 19.3 V |
+| MPP current | 1.56 A |
+| Open-circuit voltage | 23.16 V |
+| Short-circuit current | 1.67 A |
 
-These are surrogate values based on the 30 W rating and the Lagos voltage
-scale. They are not claimed to be the manufacturer's exact specifications.
+These are manufacturer label values, not surrogate values. The label does not
+include temperature coefficients, so the current and voltage temperature
+coefficients in `src/smart_mppt/augmentation.py` remain documented engineering
+assumptions.
 
-Replace them in `src/smart_mppt/augmentation.py` when the real panel datasheet
-is available, regenerate the CSV, and retrain.
+The extracted label is documented in `data/PANEL_DATASHEET.md`.
 
 ## How much generated data is trusted
 

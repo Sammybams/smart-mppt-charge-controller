@@ -50,3 +50,8 @@ received, but the owner-confirmed contract above governs the training pipeline.
 The production current prediction now blends a physics-guided lux model with
 the Lagos median current. This gives a light-responsive result while keeping
 the uncertain generated data at only 20% of the current estimate.
+
+The supplied panel nameplate gives Voc as 23.16 V, but 7,785 prepared voltage
+labels are above that value. Production training scales all field voltage
+labels by `0.7981803143`, chosen so the brightest quarter's median becomes the
+nameplate Vmp of 19.3 V. The raw CSV is not edited.

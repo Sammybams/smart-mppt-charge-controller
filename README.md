@@ -29,9 +29,9 @@ Example response:
 ```json
 {
   "max_power_point": {
-    "voltage_v": 25.837,
-    "current_a": 1.082,
-    "power_w": 27.946
+    "voltage_v": 20.626,
+    "current_a": 1.121,
+    "power_w": 23.118
   },
   "within_training_range": true,
   "warnings": []
@@ -68,17 +68,25 @@ A low-light gate reduces current toward zero when lux is very low. This means
 current is no longer a fixed value, but the uncertain generated data cannot
 overpower the real panel data.
 
-## Safety limits
+## The exact panel
 
-The current panel datasheet is not available, so the model uses clearly marked
-30 W surrogate limits:
+The supplied nameplate identifies a Sunshine Solar AP-PM-30W made in the Lekki
+Free Zone, Nigeria. Its standard-test values are:
 
-- maximum voltage: 26.5 V;
-- maximum current: 1.35 A; and
-- maximum power: 33 W.
+- maximum power voltage: 19.3 V;
+- maximum power current: 1.56 A;
+- open-circuit voltage: 23.16 V;
+- short-circuit current: 1.67 A; and
+- rated power: 30 W.
 
-The extra 3 W allows a small margin above the nameplate rating. Replace these
-values when the exact panel datasheet is available.
+Runtime output is limited to 23.16 V, 1.67 A, and 33 W. The extra 3 W is a
+small safety margin above the nameplate power, not a new panel rating.
+
+The Lagos voltage logger does not match the nameplate scale: 7,785 prepared
+rows are above the panel's 23.16 V open-circuit voltage. Training keeps the raw
+CSV unchanged, but multiplies voltage labels by `0.7981803143`. This makes the
+brightest quarter's median voltage match the real 19.3 V Vmp. The complete
+extraction is in [`data/PANEL_DATASHEET.md`](data/PANEL_DATASHEET.md).
 
 The BH1750 normally measures up to about 65,535 lux. The API warns when a value
 is close to or above that standard range. Configure the sensor's extended
@@ -102,11 +110,12 @@ data.
 
 | Check | Result |
 | --- | ---: |
-| Voltage error on unseen Lagos days | 1.725 V MAE |
-| Voltage R2 | 0.777 |
-| Current error against Lagos current column | 0.242 A MAE |
-| Power error against Lagos columns | 6.072 W MAE |
-| Current error on held-out generated examples | 0.037 A MAE |
+| Voltage error against calibrated labels | 1.363 V MAE |
+| Voltage R2 against calibrated labels | 0.777 |
+| Voltage error against raw labels | 5.467 V MAE |
+| Current error against Lagos current column | 0.238 A MAE |
+| Power error against calibrated Lagos columns | 4.754 W MAE |
+| Current error on held-out generated examples | 0.046 A MAE |
 
 The local current column has almost no dependable relationship with lux,
 temperature, or time. The hybrid current deliberately follows light more than
@@ -149,6 +158,7 @@ The finished model and its report are saved in `models/`.
 More detail is available in:
 
 - [`data/MANUAL_COLLECTION.md`](data/MANUAL_COLLECTION.md) — the real data;
+- [`data/PANEL_DATASHEET.md`](data/PANEL_DATASHEET.md) — the panel nameplate;
 - [`data/AUGMENTATION.md`](data/AUGMENTATION.md) — the generated data;
 - [`docs/TRAINING_PIPELINE.md`](docs/TRAINING_PIPELINE.md) — all training and
   prediction steps; and
