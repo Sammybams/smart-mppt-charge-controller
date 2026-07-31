@@ -10,7 +10,7 @@ import numpy as np
 import pandas as pd
 
 from smart_mppt.dataset import PROJECT_ROOT, PROCESSED_DIRECTORY, file_sha256
-from smart_mppt.time_features import calendar_features
+from smart_mppt.time_features import environmental_features
 
 
 DEFAULT_SOURCE_PATH = PROJECT_ROOT / "data" / "Manual_Collection.csv"
@@ -34,6 +34,10 @@ OUTPUT_COLUMNS = [
     "hour_cos",
     "day_of_year_sin",
     "day_of_year_cos",
+    "solar_elevation_sin",
+    "daylight_factor",
+    "clearness_proxy",
+    "sensor_range_ratio",
     "max_power_voltage_v",
     "max_power_current_a",
     "max_power_w",
@@ -103,7 +107,13 @@ def prepare_manual_dataset(
     prepared["session_id"] = new_session.cumsum().map(lambda value: f"session-{value:02d}")
     prepared["collection_date"] = prepared["timestamp"].dt.strftime("%Y-%m-%d")
     prepared["log_light_lux"] = np.log1p(prepared["light_lux"])
-    prepared = pd.concat([prepared, calendar_features(prepared["timestamp"])], axis=1)
+    prepared = pd.concat(
+        [
+            prepared,
+            environmental_features(prepared["timestamp"], prepared["light_lux"]),
+        ],
+        axis=1,
+    )
     prepared["max_power_w"] = (
         prepared["max_power_voltage_v"] * prepared["max_power_current_a"]
     )
@@ -134,6 +144,7 @@ def prepare_manual_dataset(
             "Median-aggregate multiple readings with the same timestamp",
             "Sort chronologically and split sessions at gaps over five minutes",
             "Apply log1p to lux and cyclic encodings to local time and day of year",
+            "Calculate Lagos solar elevation and BH1750 lux context features",
             "Calculate maximum power as target voltage multiplied by target current",
         ],
     }

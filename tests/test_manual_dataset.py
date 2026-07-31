@@ -33,3 +33,6 @@ def test_manual_preparation_is_reproducible_and_time_aware(tmp_path) -> None:
         frame["max_power_voltage_v"] * frame["max_power_current_a"],
     )
     assert frame[["hour_sin", "hour_cos"]].abs().le(1).all().all()
+    assert frame["solar_elevation_sin"].between(-1, 1).all()
+    assert frame["daylight_factor"].between(0, 1).all()
+    assert frame["sensor_range_ratio"].between(0, 1).all()
