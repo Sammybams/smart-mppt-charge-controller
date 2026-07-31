@@ -1,521 +1,304 @@
-# Model training and runtime pipeline
+# Lagos 30 W model: training and runtime pipeline
 
-This document describes exactly how the committed smart MPPT model was
-constructed, evaluated, saved, and used by the prediction API. It is intended
-to make every manipulation between the public source archive and the returned
-maximum power point auditable and reproducible.
+This document records every material transformation from the supplied manual
+CSV to the prediction returned by the API.
 
-## 1. Implemented objective
+## 1. Objective and scope
 
-The requested device interaction is a one-shot startup prediction.
+The current owner-confirmed contract is:
 
-The request contains:
+| Meaning | Source/API field | Unit | Role |
+| --- | --- | --- | --- |
+| Light sensor value | `LIGHT` / `light_lux` | lux | Input |
+| Ambient temperature | `TEMPERATURE` / `temperature_c` | degrees Celsius | Input |
+| Lagos measurement time | `TIME` / `timestamp` | datetime | Input |
+| Expected MPP panel voltage | `PANEL_VOLTAGE` / `voltage_v` | volts | Target/output |
+| Expected MPP panel current | `PANEL_CURRENT` / `current_a` | amperes | Target/output |
 
-| Requested value | API field | Model feature | Unit |
-|---|---|---|---|
-| Sun intensity | `sun_intensity` | `sun_intensity_w_m2` | W/m² |
-| Panel voltage | `panel_voltage` | `panel_voltage_v` | V |
-| Panel current | `panel_current` | `panel_current_a` | A |
-| Ambient temperature | `ambient_temperature` | `ambient_temperature_c` | °C |
-| Time of day | `time_of_day` | `time_of_day_hour` | Decimal local hour |
+Battery columns, unnamed columns, and free-text explanation are excluded. The
+model is specific to the measured 30 W panel and local sensor arrangement.
 
-The model directly predicts:
+## 2. Raw data audit
 
-| Model target | Meaning | Unit |
-|---|---|---|
-| `max_power_voltage_v` | Voltage at the predicted global MPP | V |
-| `max_power_current_a` | Current at the predicted global MPP | A |
-
-The API calculates maximum power as predicted voltage multiplied by predicted
-current. Power is not trained as a third independent model output. This keeps
-the returned voltage, current, and power physically consistent.
-
-```mermaid
-flowchart LR
-    A[UCP ZIP archive] --> B[Two published summary CSV files]
-    B --> C[Select startup operating points]
-    C --> D[Select global MPP labels]
-    D --> E[Time-of-day augmentation]
-    E --> F[Filter and deduplicate]
-    F --> G[Group holdout by complete PV curve]
-    G --> H[Evaluate regression model]
-    H --> I[Refit on all prepared rows]
-    I --> J[Packaged joblib artifact]
-    J --> K[POST /predict]
-```
-
-## 2. Software and fixed versions
-
-The implementation uses Python 3.11 and the following principal libraries:
-
-- pandas 2.x for loading and creating tabular datasets
-- NumPy 1.24–1.x for finite-value checks and numeric operations
-- scikit-learn 1.3.0 for splitting, modelling, and metrics
-- joblib 1.x for the compressed trained artifact
-- FastAPI and Pydantic for the runtime request/response contract
-- Uvicorn for serving the HTTP API
-
-The scikit-learn version is fixed to 1.3.0 because persisted scikit-learn
-models are not guaranteed to load safely across arbitrary library versions.
-All dependency constraints are declared in `pyproject.toml`.
-
-## 3. Public source dataset
-
-The source is:
-
-> kalaimohan T S (2021), “PV Panel: Irradiance, Temperature, Partial
-> Shading - IV Curves”, Mendeley Data, V1,
-> <https://doi.org/10.17632/z93gzbptf7.1>
-
-It is published under CC BY 4.0.
-
-The Mendeley archive is `PV_Dataset.zip`. The downloader pins both its public
-file identifier and SHA-256 checksum:
+The immutable source is `data/Manual_Collection.csv` with SHA-256:
 
 ```text
-22e39cc0b074d9ffd09459851c34898a54652ae9113661a118e2cc6270a08ae8
+09ce21869b7133c6319af2a574daf190a3049abcf0566d383d92a755c7b9b734
 ```
 
-`scripts/download_dataset.py` performs these operations:
+It contains 12,477 received rows on four dates:
 
-1. Downloads the archive to `data/raw/PV_Dataset.zip` unless it already exists.
-2. Calculates the archive SHA-256.
-3. Stops with an error if the checksum differs from the pinned checksum.
-4. Extracts only the two publisher-provided inferred summary files.
-5. Renames them to stable project filenames under `data/source/`.
+| Date | Raw rows | Approximate period represented |
+| --- | ---: | --- |
+| 2026-06-22 | 15 | 19:40-19:43 |
+| 2026-06-23 | 1,623 | 12:53-19:13 |
+| 2026-07-21 | 4,434 | 13:10-19:02 |
+| 2026-07-22 | 6,405 | 08:08-15:44 |
 
-The selected source files are:
+Observed selected-column ranges before modeling are approximately:
 
-| Project file | Original archive member | Data rows |
-|---|---|---:|
-| `uniform_irradiance_summary.csv` | `PV_Dataset/Uniform_Irradiance_Data/new_inferred_file_4line_FS.csv` | 341 |
-| `partial_shading_summary.csv` | `PV_Dataset/Partial_Shading_Data/new_inferred_file_7line_PS.csv` | 155 |
+| Field | Minimum | Maximum |
+| --- | ---: | ---: |
+| Light | 10.83 lux | 54,612.50 lux |
+| Temperature | 28.5 C | 53.8 C |
+| Target voltage | 2.71 V | 26.11 V |
+| Target current | 0.80 A | 1.49 A |
 
-The archive also contains much larger point-by-point curve files. They are not
-used in this implementation because the publisher's summaries already contain
-the operating samples and identified maximum-power points needed to construct
-the requested one-shot input/output examples. The raw 74 MB archive is
-reproducibly downloadable but excluded from Git; the two small source summaries
-are committed so training can run offline.
+The collection has duplicate rows, repeated timestamps, and occasional input
+order reversals of one or two seconds. It has no missing numeric values in the
+selected columns.
 
-Further attribution and source-file checksums are recorded in
-`data/SOURCE.md` and in the generated processed-data metadata.
+The target current has exactly 70 unique values at 0.01 A increments. Its
+distribution and weak feature correlations are why current performance is
+reported separately from voltage rather than hidden inside one average score.
 
-## 4. Source conditions
+## 3. Deterministic preparation
 
-### 4.1 Uniform irradiance
+`scripts/prepare_manual_dataset.py` calls
+`smart_mppt.manual_dataset.prepare_manual_dataset`.
 
-The uniform summary contains 341 curves:
+The steps are:
 
-- Irradiance: 500 to 1,000 W/m² in 50 W/m² increments
-- Temperature: 20 to 50 °C in 1 °C increments
-- One published MPP per curve: `P_MP`, `V_MP`, and `I_MP`
-- Open- and short-circuit values: `V_OC` and `I_SC`
-- Two additional sampled operating points: `(V_1, I_1)` and `(V_2, I_2)`
+1. Read the original CSV without editing it.
+2. Select only `TIME`, `LIGHT`, `TEMPERATURE`, `PANEL_VOLTAGE`, and
+   `PANEL_CURRENT`.
+3. Rename them to explicit unit-bearing training names.
+4. Remove exact duplicates across those five selected fields.
+5. Parse `TIME` with the exact `%m/%d/%Y %H:%M:%S` format.
+6. Parse all four physical fields as numeric and reject non-finite or negative
+   values.
+7. Group records sharing the same second and take the median of each numeric
+   field. Median aggregation is robust to conflicting duplicate readings and
+   creates one unambiguous label per timestamp.
+8. Sort ascending by timestamp; this also corrects minor logger-order
+   reversals.
+9. Start a new session after any gap longer than five minutes.
+10. Generate time and light features described below.
+11. Calculate reference target power as target voltage times target current.
 
-### 4.2 Partial shading
+Exact row accounting:
 
-The partial-shading summary contains 155 curves:
+| Stage | Rows |
+| --- | ---: |
+| Received | 12,477 |
+| Exact selected-field duplicates removed | 294 |
+| Rows after exact deduplication | 12,183 |
+| Surplus same-second rows median-aggregated | 602 |
+| Final prepared rows | 11,581 |
 
-- Partial-shading fraction: 0.1, 0.2, 0.3, 0.4, or 0.5
-- Irradiance: 1,000 W/m²
-- Temperature: 20 to 50 °C in 1 °C increments
-- Two published local MPP candidates per curve:
-  - `P_MP,0`, `V_MP,0`, and `I_MP,0`
-  - `P_MP,1`, `V_MP,1`, and `I_MP,1`
-- Open- and short-circuit values: `V_OC` and `I_SC`
-- Four additional sampled operating points: `(V_0, I_0)` through
-  `(V_3, I_3)`
+There are 601 timestamp groups containing multiple non-identical selected
+records. No target clipping, 30 W clipping, mean imputation, random noise, or
+synthetic oversampling is performed.
 
-The partial-shading fraction is retained in `source_condition` for auditing,
-but it is deliberately not a model input because the original requested
-startup payload does not contain a shading measurement.
+## 4. Time and input feature engineering
 
-## 5. Target-label construction
-
-`src/smart_mppt/dataset.py` constructs one global target for each source curve.
-
-For a uniform curve, the publisher's single identified MPP is used unchanged:
+The final feature order is:
 
 ```text
-target voltage = V_MP
-target current = I_MP
-reference power = P_MP
+light_lux
+log_light_lux
+temperature_c
+hour_sin
+hour_cos
+day_of_year_sin
+day_of_year_cos
 ```
 
-For a partial-shading curve, the two published local peaks are compared:
+`log_light_lux = log(1 + light_lux)` gives the tree model both the original
+sensor scale and a compressed representation of changes at lower light.
+
+Clock time is cyclic. Seconds since midnight are converted to an angle and
+then represented by sine and cosine:
 
 ```text
-global peak index = argmax(P_MP,0, P_MP,1)
-target voltage = V_MP,<global peak index>
-target current = I_MP,<global peak index>
-reference power = P_MP,<global peak index>
+daily_angle = 2 * pi * seconds_since_midnight / 86400
+hour_sin = sin(daily_angle)
+hour_cos = cos(daily_angle)
 ```
 
-If the two published powers are exactly equal, peak 0 is selected
-deterministically. No target is inferred from the filename, row order, or
-partial-shading fraction.
+This makes 23:59 close to 00:01 instead of opposite ends of a linear scale.
+Day of year is encoded the same way using 365.2425 days and includes the
+fractional day. This allows a June morning and a December morning to carry
+different seasonal context without treating December 31 and January 1 as far
+apart.
 
-The reference power is retained in the processed data for auditing and
-evaluation preparation. Training fits voltage and current only.
+Training timestamps are naive values explicitly interpreted as Lagos local
+time. Runtime timestamps with an offset are converted to `Africa/Lagos`; naive
+runtime values are assigned that timezone.
 
-## 6. Startup operating-point construction
+Timestamp is contextual, not a substitute for light. Measurements at similar
+times on different days show very different light patterns, as expected from
+clouds and shade. Lux supplies current conditions; clock and season supply
+broad solar-cycle context.
 
-Each physical curve describes one environmental condition, but a device may
-start at different positions on that curve. The preparation step therefore
-creates multiple startup measurements from the operating points published in
-each summary.
+## 5. Why no rolling history or LSTM is used
 
-Five startup points are constructed for every uniform curve:
+The raw sampling intervals are irregular and differ substantially by day. More
+importantly, 11,581 rows come from only four dates. A sequence model trained on
+overlapping windows would see many nearly identical samples from the same few
+trajectories. A random row/window split would then leak the same day into both
+sides and produce an optimistic score.
 
-1. Short circuit: `(0, I_SC)`
-2. Publisher sample: `(V_1, I_1)`
-3. Published MPP: `(V_MP, I_MP)`
-4. Publisher sample: `(V_2, I_2)`
-5. Open circuit: `(V_OC, 0)`
+The device requirement is also a one-time startup call. Requiring a historical
+window would change that contract and complicate cold-start operation.
 
-Eight startup points are constructed for every partial-shading curve:
+For those reasons, this version uses time-aware tabular features and validates
+on whole unseen days. An LSTM becomes reasonable only after collecting many
+independent days across seasons and operating conditions, with a defined
+history buffer available on the controller.
 
-1. Short circuit: `(0, I_SC)`
-2. Publisher sample: `(V_0, I_0)`
-3. Publisher sample: `(V_1, I_1)`
-4. Publisher sample: `(V_2, I_2)`
-5. Publisher sample: `(V_3, I_3)`
-6. First published local MPP: `(V_MP,0, I_MP,0)`
-7. Second published local MPP: `(V_MP,1, I_MP,1)`
-8. Open circuit: `(V_OC, 0)`
+## 6. Treatment of public data
 
-Every startup point from a curve receives that curve's same global MPP label.
-This teaches the model to return the curve's maximum from different possible
-startup voltage/current positions.
+The legacy UCP source and reproducible downloader are retained. UCP uses solar
+irradiance in W/m2 and represents a simulated 250 W, 60-cell panel. The Lagos
+sensor reports illuminance in lux for a physical 30 W panel.
 
-## 7. Mapping temperature and time
+Lux describes human-visible illuminance and W/m2 describes incident radiant
+power. Their ratio changes with spectrum, clouds, sun angle, sensor response,
+and calibration. Nameplate normalization can make voltage/current/power
+dimensionless, but it cannot create the missing lux-to-irradiance calibration
+or make the panel electrical characteristics identical. Therefore UCP is not
+concatenated with the production training table.
 
-The UCP field named `Temperature` is mapped directly to the requested
-`ambient_temperature` input. It is not corrected, rescaled, or converted.
-Deployment sensors should therefore use degrees Celsius and should be
-calibrated against the temperature interpretation used by the source setup.
+A 2026 Scientific Reports study is closer in rating: it used an ET-M53630WW
+30 W panel and recorded 55 I-V curves at five-minute intervals. However, it was
+a different, aged panel in Oujda, Morocco, used W/m2 irradiance, and studied
+uniform conditions. It is a good pattern for future data collection, not a
+drop-in source of labels for this exact sensor and panel.
 
-The source dataset does not contain time of day. To retain the exact requested
-input without creating a false relationship, every constructed operating point
-is repeated at these representative local hours:
+## 7. Leakage-resistant evaluation
 
-```text
-08:00, 10:00, 12:00, 14:00, 16:00
-```
+`LeaveOneGroupOut` uses `collection_date` as its group. Four evaluation fits
+are made. Each holds out one complete date and trains on the other three. No
+record from the held-out date, including immediately adjacent sensor readings,
+can enter that fold's training data.
 
-All five copies keep the same physical inputs and same MPP target. Only time
-changes. This is label-preserving augmentation: it lets the runtime accept time
-of day while not claiming that clock time changes the target when irradiance,
-voltage, current, and temperature are unchanged.
+The aggregate metric concatenates every fold's out-of-fold prediction before
+calculation, so larger days contribute in proportion to their row count. The
+per-day metrics remain in `models/training_report.json`. The 2026-06-22 fold
+contains only 15 late-evening readings; its R2 is mathematically valid but not
+a stable standalone estimate.
 
-At inference, `HH:MM:SS` is converted to decimal hour using:
+## 8. Model comparison and selection
 
-```text
-hour + minute / 60 + second / 3600
-```
+Candidate voltage estimators included random forest, Extra Trees, histogram
+gradient boosting, and a constant baseline. Random forest had the best overall
+day-isolated voltage MAE in the comparison.
 
-No date, timezone, latitude, longitude, or season is added.
-
-## 8. Filtering and final row counts
-
-Before a startup operating point is accepted:
-
-- Voltage and current must both be finite.
-- Voltage and current must both be greater than or equal to zero.
-
-After all rows are assembled:
-
-1. Positive and negative infinity are replaced with missing values.
-2. Rows containing any missing value are dropped.
-3. Exact duplicate rows are dropped.
-4. The remaining row index is reset.
-
-There is no mean/median imputation, outlier clipping, standardization,
-normalization, logarithmic transform, categorical encoding, or random noise
-injection.
-
-The deterministic row derivation is:
-
-| Source condition | Curves | Startup points per curve | Time copies | Prepared rows |
-|---|---:|---:|---:|---:|
-| Uniform | 341 | 5 | 5 | 8,525 |
-| Partial shading | 155 | 8 | 5 | 6,200 |
-| **Total** | **496** |  |  | **14,725** |
-
-The generated files are:
-
-- `data/processed/startup_training.csv`
-- `data/processed/startup_training.metadata.json`
-
-They are generated artifacts and excluded from Git. The metadata records the
-source checksums, derivation summary, columns, source-condition counts, row
-count, curve count, and augmented hours.
-
-## 9. Model inputs and non-model columns
-
-The five model features, in fixed order, are:
+The voltage estimator is `RandomForestRegressor` with:
 
 ```text
-sun_intensity_w_m2
-panel_voltage_v
-panel_current_a
-ambient_temperature_c
-time_of_day_hour
-```
-
-The two targets, in fixed order, are:
-
-```text
-max_power_voltage_v
-max_power_current_a
-```
-
-These processed columns are not given to the estimator:
-
-- `condition_id`: identifies all augmented rows from the same physical curve
-- `source_condition`: identifies uniform or partial-shading source class
-- `max_power_w`: publisher reference power for the selected global peak
-
-In particular, the estimator does not receive the answer power, the
-partial-shading fraction, the source class, or the curve identifier.
-
-## 10. Leakage-resistant holdout
-
-Randomly splitting individual rows would leak near-identical augmented copies
-of the same curve into both training and testing. The evaluation instead uses
-`GroupShuffleSplit` with:
-
-```text
-test_size = 0.20
-random_state = 42
-group = condition_id
-```
-
-Consequently, every operating point and every time copy belonging to a source
-curve stays entirely on one side of the split.
-
-The resulting evaluation holdout contains:
-
-- 100 complete source curves
-- 3,055 prepared startup rows
-
-The remaining 396 curves and 11,670 rows train the evaluation model. The split
-is deterministic for the committed data and scikit-learn version.
-
-## 11. Estimator and hyperparameters
-
-The estimator is a scikit-learn `MultiOutputRegressor`. It fits one
-`HistGradientBoostingRegressor` for MPP voltage and another for MPP current.
-
-Each underlying regressor uses:
-
-```text
-learning_rate = 0.1
-max_iter = 160
-max_leaf_nodes = 31
-l2_regularization = 1.0
+n_estimators = 80
+min_samples_leaf = 8
+max_features = 0.9
+n_jobs = 1
 random_state = 42
 ```
 
-All other parameters use the scikit-learn 1.3.0 defaults.
+The current candidates did not beat a median baseline under leave-one-day-out
+validation. The final current estimator is consequently a
+`DummyRegressor(strategy="median")`. It still produces the requested current,
+but accurately represents the evidence: the current sensor target currently
+has no demonstrated generalizable mapping from lux, temperature, and time.
 
-Histogram gradient boosting was selected because it models nonlinear
-relationships and interactions among irradiance, the current operating point,
-and temperature while producing a compact CPU inference artifact. The
-committed compressed model is 336,807 bytes.
+This per-target choice is safer than a multi-output neural model whose good
+voltage behavior could obscure uninformative current predictions.
 
-The model consumes the raw numeric features. No scaler or preprocessing
-pipeline is needed at runtime.
+## 9. Evaluation results
 
-## 12. Evaluation and final refit
-
-Training is performed in two distinct passes.
-
-### Evaluation pass
-
-1. Fit the estimator on the grouped 80% development partition.
-2. Predict MPP voltage and current for the grouped 20% holdout.
-3. Calculate voltage and current MAE.
-4. Calculate voltage and current R².
-5. Multiply predicted voltage by predicted current.
-6. Compare that product with actual target voltage multiplied by actual target
-   current to calculate power MAE.
-
-The committed holdout results are:
+Out-of-fold metrics across all complete-day holdouts are:
 
 | Metric | Result |
-|---|---:|
-| MPP voltage MAE | 0.563393 V |
-| MPP current MAE | 0.021849 A |
-| MPP voltage R² | 0.951568 |
-| MPP current R² | 0.999206 |
-| Derived maximum-power MAE | 4.695585 W |
+| --- | ---: |
+| Voltage MAE | 1.882936 V |
+| Voltage R2 | 0.649073 |
+| Current MAE | 0.173991 A |
+| Current R2 | -0.000220 |
+| Derived power MAE | 4.684770 W |
 
-### Final artifact pass
-
-After the holdout metrics are captured, a fresh estimator with the same
-hyperparameters is fitted on all 14,725 rows. This final refit is what is
-persisted for application inference. The holdout model itself is not shipped.
-
-This is why the committed artifact benefits from all available source curves
-while the report still contains an evaluation obtained from unseen complete
-curves.
-
-## 13. Saved model artifact and report
-
-The final artifact is serialized with joblib compression level 3 to:
+Power for evaluation is calculated consistently as:
 
 ```text
-models/smart_mppt.joblib
+actual_power = target_voltage * target_current
+predicted_power = predicted_voltage * predicted_current
 ```
 
-The artifact contains:
+The negative-near-zero current R2 means the median does not explain current
+variation. It is not evidence that current prediction is solved. The voltage
+result is useful but also varies by day; the latest-day holdout has 2.132577 V
+MAE and negative R2 because its voltage variance is narrow relative to its
+cross-day shift.
 
-- Artifact format version
-- Both fitted regressors
-- Ordered feature names
-- Ordered target names
-- Minimum and maximum training value for each feature
-- Source dataset DOI
+## 10. Final refit and artifact
 
-Training first writes a temporary file and then replaces the destination, so
-an interrupted write does not leave the expected model path half-written.
+After validation metrics are produced, fresh voltage and current estimators are
+fitted on all 11,581 prepared rows. The compressed artifact is written to a
+temporary file and atomically moved to `models/smart_mppt.joblib`.
 
-`models/training_report.json` records:
+Artifact version 2 contains:
 
-- Dataset and model SHA-256 checksums
-- Dataset DOI
-- Model type
-- Random seed
-- scikit-learn version
-- Training and holdout sizes
-- Split policy
-- Feature and target order
-- Training ranges
-- Holdout metrics
+- fitted voltage and current estimators;
+- ordered feature and target names;
+- observed lux, temperature, local-hour, and day-of-year ranges;
+- source dataset name, panel rating, light unit, and timezone; and
+- artifact format version.
 
-The committed artifact SHA-256 is:
+`models/training_report.json` records dataset/model checksums, software
+version, model selection rationale, dates, features, targets, validation
+policy, aggregate and per-day metrics, and known limitations.
 
-```text
-34d3b6d26eba37a355fab8ceee73ee82506e56b8baf25a9e6ecc2d4ba4188926
-```
+The model is fitted directly to numeric features. Tree models do not require a
+standard scaler, so no z-score normalization is used. `log1p(lux)` is the only
+scale transform.
 
-## 14. Runtime inference
-
-Normal API operation does not download or retrain anything.
+## 11. Runtime transformation
 
 For `POST /predict`:
 
-1. Pydantic verifies the request types and broad physical bounds.
-2. The supplied time is converted to decimal hour.
-3. The request fields are renamed and ordered to match the five training
-   features.
-4. The cached joblib artifact predicts MPP voltage and MPP current.
-5. Negative model outputs, if any, are clamped to zero.
-6. Power is calculated from the unrounded predicted voltage and current.
-7. Voltage, current, and power are rounded to three decimal places.
-8. Each input is compared with the model's recorded training range.
-9. The API returns the MPP plus `within_training_range` and any warnings.
+1. Pydantic checks types and broad physical limits.
+2. The timestamp is interpreted or converted to Lagos local time.
+3. Lux is transformed with the same `log1p` formula used in training.
+4. The daily and annual cyclic features are generated by the shared
+   `time_features.py` implementation.
+5. Features are ordered exactly as stored in the artifact.
+6. The voltage forest and current median regressor predict independently.
+7. Negative predictions are clamped to zero.
+8. Power is computed from the unrounded predictions.
+9. Outputs are rounded to three decimals.
+10. Lux, temperature, local time, and day of year are checked against observed
+    collection ranges and warnings are returned for extrapolation.
 
-The model is loaded once per application process and cached for subsequent
-requests.
+The artifact loads once per API process and is cached. Normal requests neither
+download data nor retrain the model, and no LLM or external API is involved.
 
-The training-data ranges used for warnings are:
+## 12. What the target does and does not establish
 
-| Feature | Minimum | Maximum |
-|---|---:|---:|
-| Sun intensity | 500 W/m² | 1,000 W/m² |
-| Startup panel voltage | 0 V | 36.585 V |
-| Startup panel current | 0 A | 9 A |
-| Temperature | 20 °C | 50 °C |
-| Time of day | 08:00 | 16:00 |
+The owner confirmed `PANEL_VOLTAGE` and `PANEL_CURRENT` as the expected maximum
+voltage/current outputs, so they are used as supervised labels.
 
-Requests outside these ranges are accepted when they remain within the API's
-broad validation bounds, but they are explicitly marked as outside the model's
-training range.
+Nevertheless, one voltage/current pair at a timestamp cannot mathematically
+demonstrate a global maximum on a multi-peak P-V curve. A global label requires
+a contemporaneous curve sweep or another trusted controller/reference that
+searched all relevant peaks. The model therefore estimates the supplied target
+definition and is appropriate for choosing an initial search neighborhood. It
+should not replace the firmware's local verification/search.
 
-## 15. Complete reproduction
+## 13. Recommended next collection
 
-From a clean checkout:
+For a rigorous partial-shading global-MPP model, collect many independent days
+and perform fast sweeps that minimize environmental change during each curve.
+For every sweep store:
 
-```bash
-python -m venv .venv
-source .venv/bin/activate
-python -m pip install -e '.[dev]'
-python scripts/download_dataset.py
-python scripts/prepare_dataset.py
-python scripts/train_model.py
-pytest
-```
+- unique sweep ID and precise Lagos timestamp;
+- raw lux and, ideally, a calibrated pyranometer irradiance in W/m2;
+- ambient and rear-panel/cell temperature separately;
+- shade configuration or image-derived shade descriptor when available;
+- every swept panel voltage and current pair;
+- computed power for every point; and
+- the global peak voltage, current, and power selected from the complete sweep.
 
-The download is optional when the committed source summaries are present. It
-is included above to verify the original public archive and reproduce the
-extraction itself.
-
-The scripts can also be run separately:
-
-```bash
-# Verify/extract the pinned source archive
-python scripts/download_dataset.py
-
-# Rebuild processed rows and metadata
-python scripts/prepare_dataset.py
-
-# Evaluate, refit, and replace model/report
-python scripts/train_model.py
-
-# Start the prediction service
-smart-mppt-api
-```
-
-To use a model artifact at another location:
-
-```bash
-export SMART_MPPT_MODEL_PATH=/absolute/path/to/smart_mppt.joblib
-smart-mppt-api
-```
-
-## 16. Automated verification
-
-The test suite checks:
-
-- The health endpoint loads the packaged model.
-- The documented sample request produces the documented sample response.
-- Both supported time formats are accepted.
-- Invalid physical input is rejected.
-- Out-of-training-range input returns warnings.
-- The packaged model returns a positive MPP.
-- Dataset preparation reproduces 14,725 rows from 496 curves.
-- All prepared targets are positive.
-- Dataset DOI and generated metadata counts are correct.
-
-Run:
-
-```bash
-pytest
-```
-
-## 17. Scope and current data boundaries
-
-This implementation satisfies the requested startup request/response workflow
-and produces a predicted global MPP from the specified five fields.
-
-The following boundaries should be considered when connecting physical
-hardware:
-
-- The public dataset represents its source panel and curve-generation setup.
-  A materially different panel or series/parallel array should be validated and
-  preferably fine-tuned using measurements from that hardware.
-- Partial-shading source curves are available at 1,000 W/m² only.
-- Time of day is an interface-compatible, label-preserving augmentation rather
-  than a measured source variable.
-- The source `Temperature` value is mapped directly to the requested ambient
-  temperature field; sensor placement and calibration should be checked on the
-  actual controller.
-- Predictions outside the recorded training ranges are extrapolations and are
-  flagged in the response.
-
-These boundaries do not change the API contract. They define where additional
-hardware-specific data would improve production accuracy without requiring a
-redesign of the service.
+Also record panel model/specification, sensor model and calibration, converter
+duty cycle, battery/load state, and firmware version. Split future evaluation
+by complete day and, where possible, by shade experiment. Once there are many
+independent days, compare lag/rolling features and sequence models against this
+tabular baseline without changing the test days.
