@@ -1,8 +1,8 @@
-"""HTTP API matching the requested one-shot startup prediction interface."""
+"""One-shot startup API for the Lagos 30 W MPPT model."""
 
 from __future__ import annotations
 
-from datetime import time
+from datetime import datetime
 
 from fastapi import FastAPI
 from pydantic import BaseModel, ConfigDict, Field
@@ -15,44 +15,35 @@ class StartupPredictionRequest(BaseModel):
     model_config = ConfigDict(
         json_schema_extra={
             "example": {
-                "sun_intensity": 850,
-                "panel_voltage": 24.5,
-                "panel_current": 7.8,
-                "ambient_temperature": 32,
-                "time_of_day": "12:30:00",
+                "light_lux": 42000,
+                "temperature_c": 38.5,
+                "timestamp": "2026-07-22T12:30:00+01:00",
             }
         }
     )
 
-    sun_intensity: float = Field(
+    light_lux: float = Field(
         ge=0,
-        le=1500,
-        description="Measured solar irradiance in W/m²",
+        le=200_000,
+        description="Illuminance reported by the project light sensor in lux",
     )
-    panel_voltage: float = Field(
-        ge=0,
-        le=100,
-        description="Panel voltage at device startup in volts",
-    )
-    panel_current: float = Field(
-        ge=0,
-        le=100,
-        description="Panel current at device startup in amperes",
-    )
-    ambient_temperature: float = Field(
+    temperature_c: float = Field(
         ge=-50,
         le=100,
         description="Ambient temperature in degrees Celsius",
     )
-    time_of_day: time = Field(
-        description="Local device time in HH:MM or HH:MM:SS format",
+    timestamp: datetime = Field(
+        description=(
+            "Measurement date and time. Include a UTC offset when possible; "
+            "a timestamp without one is interpreted as Africa/Lagos time."
+        )
     )
 
 
 class MaximumPowerPoint(BaseModel):
-    voltage: float = Field(description="Predicted MPP voltage in volts")
-    current: float = Field(description="Predicted MPP current in amperes")
-    power: float = Field(description="Predicted maximum power in watts")
+    voltage_v: float = Field(description="Predicted MPP panel voltage in volts")
+    current_a: float = Field(description="Predicted MPP panel current in amperes")
+    power_w: float = Field(description="Voltage multiplied by current in watts")
 
 
 class StartupPredictionResponse(BaseModel):
@@ -71,8 +62,8 @@ app = FastAPI(
     title="AI Enabled Smart MPPT Charge Controller",
     version=__version__,
     description=(
-        "Predicts the maximum power point once from the measurements supplied "
-        "when the charge controller starts."
+        "Predicts a 30 W panel's maximum-power voltage and current once from "
+        "a Lagos light, temperature, and timestamp reading."
     ),
 )
 
@@ -83,33 +74,25 @@ def health() -> HealthResponse:
     return HealthResponse(
         status="ok",
         version=__version__,
-        model=f"UCP {predictor.dataset_doi}",
+        model=predictor.dataset,
     )
 
 
 @app.post("/predict", response_model=StartupPredictionResponse)
 def predict(request: StartupPredictionRequest) -> StartupPredictionResponse:
-    time_as_hour = (
-        request.time_of_day.hour
-        + request.time_of_day.minute / 60
-        + request.time_of_day.second / 3600
-    )
     result = get_predictor().predict(
         StartupMeasurement(
-            sun_intensity=request.sun_intensity,
-            panel_voltage=request.panel_voltage,
-            panel_current=request.panel_current,
-            ambient_temperature=request.ambient_temperature,
-            time_of_day_hour=time_as_hour,
+            light_lux=request.light_lux,
+            temperature_c=request.temperature_c,
+            timestamp=request.timestamp,
         )
     )
     return StartupPredictionResponse(
         max_power_point=MaximumPowerPoint(
-            voltage=result.voltage,
-            current=result.current,
-            power=result.power,
+            voltage_v=result.voltage,
+            current_a=result.current,
+            power_w=result.power,
         ),
         within_training_range=result.within_training_range,
         warnings=list(result.warnings),
     )
-

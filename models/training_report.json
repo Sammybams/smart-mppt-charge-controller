@@ -1,58 +1,107 @@
 {
-  "artifact_version": 1,
-  "model_type": "MultiOutputRegressor(HistGradientBoostingRegressor)",
+  "artifact_version": 2,
+  "model_type": {
+    "voltage": "RandomForestRegressor",
+    "current": "DummyRegressor(median)"
+  },
+  "model_selection": {
+    "voltage": "Random forest outperformed Extra Trees, gradient boosting, and a median baseline in leave-one-day-out validation.",
+    "current": "No tested feature model beat a day-isolated median baseline; the median avoids claiming a learned relationship that did not generalize."
+  },
   "random_seed": 42,
-  "dataset_doi": "10.17632/z93gzbptf7.1",
-  "dataset_sha256": "21b9535a50eb326a15eeba693550e9c456e8a7c7ba5048f21f422ab61f19ae42",
-  "model_sha256": "34d3b6d26eba37a355fab8ceee73ee82506e56b8baf25a9e6ecc2d4ba4188926",
+  "dataset": "Lagos 30 W manual PV collection",
+  "dataset_sha256": "84e9e9fbf61e97a0a5e6914548edb0302c29c62f88074ae9ad0b70cc7d79420c",
+  "model_sha256": "db6962c3b7d814c0a321662ee0e7ff6c4a1ae71202b0e8479bee44ad1431fb92",
   "scikit_learn_version": "1.3.0",
-  "training_rows": 14725,
-  "source_curves": 496,
-  "holdout_rows": 3055,
-  "holdout_curves": 100,
-  "split_policy": "20% group holdout by source curve",
+  "training_rows": 11581,
+  "collection_days": 4,
+  "collection_dates": [
+    "2026-06-22",
+    "2026-06-23",
+    "2026-07-21",
+    "2026-07-22"
+  ],
+  "split_policy": "Leave one complete collection date out per fold",
   "features": [
-    "sun_intensity_w_m2",
-    "panel_voltage_v",
-    "panel_current_a",
-    "ambient_temperature_c",
-    "time_of_day_hour"
+    "light_lux",
+    "log_light_lux",
+    "temperature_c",
+    "hour_sin",
+    "hour_cos",
+    "day_of_year_sin",
+    "day_of_year_cos"
   ],
   "targets": [
     "max_power_voltage_v",
     "max_power_current_a"
   ],
-  "training_ranges": {
-    "sun_intensity_w_m2": {
-      "minimum": 500.0,
-      "maximum": 1000.0
+  "input_ranges": {
+    "light_lux": {
+      "minimum": 10.83,
+      "maximum": 54612.5
     },
-    "panel_voltage_v": {
-      "minimum": 0.0,
-      "maximum": 36.585
-    },
-    "panel_current_a": {
-      "minimum": 0.0,
-      "maximum": 9.0
-    },
-    "ambient_temperature_c": {
-      "minimum": 20.0,
-      "maximum": 50.0
+    "temperature_c": {
+      "minimum": 28.5,
+      "maximum": 53.8
     },
     "time_of_day_hour": {
-      "minimum": 8.0,
-      "maximum": 16.0
+      "minimum": 8.133333333333333,
+      "maximum": 19.724999999999998
+    },
+    "day_of_year": {
+      "minimum": 173.0,
+      "maximum": 203.0
     }
   },
-  "holdout_metrics": {
-    "voltage_current_mae": [
-      0.563393,
-      0.021849
-    ],
-    "voltage_current_r2": [
-      0.951568,
-      0.999206
-    ],
-    "power_mae_w": 4.695585
-  }
+  "leave_one_day_out_metrics": {
+    "voltage_mae_v": 1.882936,
+    "voltage_r2": 0.649073,
+    "current_mae_a": 0.173991,
+    "current_r2": -0.00022,
+    "power_mae_w": 4.68477
+  },
+  "per_day_metrics": [
+    {
+      "held_out_date": "2026-06-22",
+      "rows": 15,
+      "voltage_mae_v": 7.357881,
+      "voltage_r2": -382.297987,
+      "current_mae_a": 0.176,
+      "current_r2": -0.322115,
+      "power_mae_w": 9.532623
+    },
+    {
+      "held_out_date": "2026-06-23",
+      "rows": 1572,
+      "voltage_mae_v": 1.744715,
+      "voltage_r2": 0.813352,
+      "current_mae_a": 0.171247,
+      "current_r2": -9.7e-05,
+      "power_mae_w": 4.65119
+    },
+    {
+      "held_out_date": "2026-07-21",
+      "rows": 4089,
+      "voltage_mae_v": 1.555477,
+      "voltage_r2": 0.698174,
+      "current_mae_a": 0.173402,
+      "current_r2": -0.000668,
+      "power_mae_w": 4.843494
+    },
+    {
+      "held_out_date": "2026-07-22",
+      "rows": 5905,
+      "voltage_mae_v": 2.132577,
+      "voltage_r2": -3.492451,
+      "current_mae_a": 0.175124,
+      "current_r2": -0.000179,
+      "power_mae_w": 4.571484
+    }
+  ],
+  "known_limitations": [
+    "Only four independent collection dates are available.",
+    "The 15-row 2026-06-22 fold is too small for a stable per-day R2 score.",
+    "PANEL_CURRENT has no validated relationship with lux, temperature, or timestamp in this collection.",
+    "Predicted power may exceed the nominal 30 W rating because targets are retained without clipping."
+  ]
 }

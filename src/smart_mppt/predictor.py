@@ -1,14 +1,21 @@
-"""Load the trained model and predict a startup maximum power point."""
+"""Load the Lagos model and predict a startup maximum power point."""
 
 from __future__ import annotations
 
 import os
 from dataclasses import dataclass
+from datetime import datetime
 from functools import lru_cache
 from pathlib import Path
 
 import joblib
+import numpy as np
 import pandas as pd
+
+from smart_mppt.time_features import (
+    calendar_features_for_timestamp,
+    to_lagos_local,
+)
 
 
 def default_model_path() -> Path:
@@ -20,19 +27,16 @@ def default_model_path() -> Path:
 
 @dataclass(frozen=True)
 class StartupMeasurement:
-    sun_intensity: float
-    panel_voltage: float
-    panel_current: float
-    ambient_temperature: float
-    time_of_day_hour: float
+    light_lux: float
+    temperature_c: float
+    timestamp: datetime
 
     def as_features(self) -> dict[str, float]:
         return {
-            "sun_intensity_w_m2": self.sun_intensity,
-            "panel_voltage_v": self.panel_voltage,
-            "panel_current_a": self.panel_current,
-            "ambient_temperature_c": self.ambient_temperature,
-            "time_of_day_hour": self.time_of_day_hour,
+            "light_lux": self.light_lux,
+            "log_light_lux": float(np.log1p(self.light_lux)),
+            "temperature_c": self.temperature_c,
+            **calendar_features_for_timestamp(self.timestamp),
         }
 
 
@@ -46,35 +50,45 @@ class Prediction:
 
 
 class MPPPredictor:
-    """Inference wrapper around the packaged UCP-trained estimator."""
+    """Inference wrapper around the packaged Lagos 30 W estimators."""
 
     def __init__(self, model_path: Path | None = None) -> None:
         if model_path is None:
             model_path = default_model_path()
         if not model_path.exists():
             raise FileNotFoundError(
-                f"Model artifact not found at {model_path}. "
-                "Run scripts/train_model.py."
+                f"Model artifact not found at {model_path}. Run scripts/train_model.py."
             )
         artifact = joblib.load(model_path)
-        if artifact.get("artifact_version") != 1:
-            raise ValueError("Unsupported model artifact version")
-        self.model = artifact["model"]
+        if artifact.get("artifact_version") != 2:
+            raise ValueError(
+                "Unsupported model artifact version; retrain with scripts/train_model.py"
+            )
+        self.voltage_model = artifact["voltage_model"]
+        self.current_model = artifact["current_model"]
         self.feature_columns: list[str] = artifact["feature_columns"]
-        self.training_ranges: dict[str, dict[str, float]] = artifact[
-            "training_ranges"
-        ]
-        self.dataset_doi: str = artifact["dataset_doi"]
+        self.input_ranges: dict[str, dict[str, float]] = artifact["input_ranges"]
+        self.dataset: str = artifact["dataset"]
+        self.panel_rating_w: float = artifact["panel_rating_w"]
 
-    def _range_warnings(self, features: dict[str, float]) -> tuple[str, ...]:
+    def _range_warnings(self, measurement: StartupMeasurement) -> tuple[str, ...]:
+        local = to_lagos_local(measurement.timestamp)
+        values = {
+            "light_lux": measurement.light_lux,
+            "temperature_c": measurement.temperature_c,
+            "time_of_day_hour": (
+                local.hour + local.minute / 60 + local.second / 3600
+            ),
+            "day_of_year": float(local.timetuple().tm_yday),
+        }
         warnings: list[str] = []
-        for name, value in features.items():
-            limits = self.training_ranges[name]
+        for name, value in values.items():
+            limits = self.input_ranges[name]
             minimum = limits["minimum"]
             maximum = limits["maximum"]
             if not minimum <= value <= maximum:
                 warnings.append(
-                    f"{name}={value:g} is outside the trained range "
+                    f"{name}={value:g} is outside the collected range "
                     f"[{minimum:g}, {maximum:g}]"
                 )
         return tuple(warnings)
@@ -82,10 +96,9 @@ class MPPPredictor:
     def predict(self, measurement: StartupMeasurement) -> Prediction:
         features = measurement.as_features()
         frame = pd.DataFrame([features], columns=self.feature_columns)
-        prediction = self.model.predict(frame)[0]
-        voltage = max(0.0, float(prediction[0]))
-        current = max(0.0, float(prediction[1]))
-        warnings = self._range_warnings(features)
+        voltage = max(0.0, float(self.voltage_model.predict(frame)[0]))
+        current = max(0.0, float(self.current_model.predict(frame)[0]))
+        warnings = self._range_warnings(measurement)
         return Prediction(
             voltage=round(voltage, 3),
             current=round(current, 3),

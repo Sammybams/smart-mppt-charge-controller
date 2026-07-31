@@ -124,12 +124,26 @@ def train(
     voltage_model.fit(frame[FEATURE_COLUMNS], frame[TARGET_COLUMNS[0]])
     current_model.fit(frame[FEATURE_COLUMNS], frame[TARGET_COLUMNS[1]])
 
+    timestamps = pd.to_datetime(frame["timestamp"])
+    local_hours = (
+        timestamps.dt.hour
+        + timestamps.dt.minute / 60
+        + timestamps.dt.second / 3600
+    )
     input_ranges = {
         column: {
             "minimum": float(frame[column].min()),
             "maximum": float(frame[column].max()),
         }
         for column in ("light_lux", "temperature_c")
+    }
+    input_ranges["time_of_day_hour"] = {
+        "minimum": float(local_hours.min()),
+        "maximum": float(local_hours.max()),
+    }
+    input_ranges["day_of_year"] = {
+        "minimum": float(timestamps.dt.dayofyear.min()),
+        "maximum": float(timestamps.dt.dayofyear.max()),
     }
     artifact = {
         "artifact_version": 2,

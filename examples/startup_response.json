@@ -1,8 +1,8 @@
 {
   "max_power_point": {
-    "voltage": 28.678,
-    "current": 7.077,
-    "power": 202.957
+    "voltage_v": 25.829,
+    "current_a": 1.15,
+    "power_w": 29.704
   },
   "within_training_range": true,
   "warnings": []

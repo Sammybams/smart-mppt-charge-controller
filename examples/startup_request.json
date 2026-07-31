@@ -1,7 +1,5 @@
 {
-  "sun_intensity": 850,
-  "panel_voltage": 24.5,
-  "panel_current": 7.8,
-  "ambient_temperature": 32,
-  "time_of_day": "12:30:00"
+  "light_lux": 42000,
+  "temperature_c": 38.5,
+  "timestamp": "2026-07-22T12:30:00+01:00"
 }
