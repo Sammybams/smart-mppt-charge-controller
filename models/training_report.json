@@ -1,19 +1,19 @@
 {
-  "artifact_version": 2,
+  "artifact_version": 3,
   "model_type": {
-    "voltage": "RandomForestRegressor",
-    "current": "DummyRegressor(median)"
-  },
-  "model_selection": {
-    "voltage": "Random forest outperformed Extra Trees, gradient boosting, and a median baseline in leave-one-day-out validation.",
-    "current": "No tested feature model beat a day-isolated median baseline; the median avoids claiming a learned relationship that did not generalize."
+    "voltage": "RandomForestRegressor trained on Lagos field labels",
+    "current": "20% monotonic physics model blended with an 80% Lagos median anchor and a low-light gate"
   },
   "random_seed": 42,
-  "dataset": "Lagos 30 W manual PV collection",
-  "dataset_sha256": "84e9e9fbf61e97a0a5e6914548edb0302c29c62f88074ae9ad0b70cc7d79420c",
-  "model_sha256": "db6962c3b7d814c0a321662ee0e7ff6c4a1ae71202b0e8479bee44ad1431fb92",
+  "local_dataset_sha256": "ac2234deea2069a40659762d81cb78a365635b22a0d83861030fbc6eb05b3385",
+  "augmented_dataset_sha256": "552e84dffc49181a574e234e11d80be03aaa3a0b6438f177ba9994ef36a28553",
+  "model_sha256": "28047fb27de1a6f394c58a4962f67cbcaf2ff98087f36649cf6bc1ceb6e71bda",
   "scikit_learn_version": "1.3.0",
-  "training_rows": 11581,
+  "local_training_rows": 11581,
+  "augmented_training_rows": 30000,
+  "current_local_anchor_a": 1.15,
+  "current_physics_blend": 0.2,
+  "current_dark_gate_lux": 250.0,
   "collection_days": 4,
   "collection_dates": [
     "2026-06-22",
@@ -21,21 +21,34 @@
     "2026-07-21",
     "2026-07-22"
   ],
-  "split_policy": "Leave one complete collection date out per fold",
-  "features": [
+  "field_split_policy": "Leave one complete Lagos collection date out per fold",
+  "voltage_features": [
     "light_lux",
     "log_light_lux",
     "temperature_c",
     "hour_sin",
     "hour_cos",
     "day_of_year_sin",
-    "day_of_year_cos"
+    "day_of_year_cos",
+    "solar_elevation_sin",
+    "daylight_factor",
+    "clearness_proxy",
+    "sensor_range_ratio"
+  ],
+  "current_features": [
+    "light_lux",
+    "log_light_lux",
+    "temperature_c",
+    "solar_elevation_sin",
+    "daylight_factor",
+    "clearness_proxy",
+    "sensor_range_ratio"
   ],
   "targets": [
     "max_power_voltage_v",
     "max_power_current_a"
   ],
-  "input_ranges": {
+  "collected_ranges": {
     "light_lux": {
       "minimum": 10.83,
       "maximum": 54612.5
@@ -53,55 +66,88 @@
       "maximum": 203.0
     }
   },
-  "leave_one_day_out_metrics": {
-    "voltage_mae_v": 1.882936,
-    "voltage_r2": 0.649073,
-    "current_mae_a": 0.173991,
-    "current_r2": -0.00022,
-    "power_mae_w": 4.68477
+  "supported_ranges": {
+    "light_lux": {
+      "minimum": 1.0,
+      "maximum": 100000.0
+    },
+    "temperature_c": {
+      "minimum": 24.0,
+      "maximum": 58.0
+    },
+    "time_of_day_hour": {
+      "minimum": 5.5,
+      "maximum": 19.5
+    },
+    "day_of_year": {
+      "minimum": 1.0,
+      "maximum": 365.0
+    }
   },
-  "per_day_metrics": [
+  "field_leave_one_day_out_metrics": {
+    "voltage_mae_v": 1.724923,
+    "voltage_r2": 0.777478,
+    "current_mae_a": 0.241653,
+    "current_r2": -1.256363,
+    "power_mae_w": 6.071972
+  },
+  "field_per_day_metrics": [
     {
       "held_out_date": "2026-06-22",
       "rows": 15,
-      "voltage_mae_v": 7.357881,
-      "voltage_r2": -382.297987,
-      "current_mae_a": 0.176,
-      "current_r2": -0.322115,
-      "power_mae_w": 9.532623
+      "voltage_mae_v": 7.838381,
+      "voltage_r2": -433.828755,
+      "current_mae_a": 1.130692,
+      "current_r2": -40.232963,
+      "power_mae_w": 13.136844
     },
     {
       "held_out_date": "2026-06-23",
       "rows": 1572,
-      "voltage_mae_v": 1.744715,
-      "voltage_r2": 0.813352,
-      "current_mae_a": 0.171247,
-      "current_r2": -9.7e-05,
-      "power_mae_w": 4.65119
+      "voltage_mae_v": 1.40493,
+      "voltage_r2": 0.873022,
+      "current_mae_a": 0.280023,
+      "current_r2": -2.447846,
+      "power_mae_w": 4.827417
     },
     {
       "held_out_date": "2026-07-21",
       "rows": 4089,
-      "voltage_mae_v": 1.555477,
-      "voltage_r2": 0.698174,
-      "current_mae_a": 0.173402,
-      "current_r2": -0.000668,
-      "power_mae_w": 4.843494
+      "voltage_mae_v": 1.12222,
+      "voltage_r2": 0.897829,
+      "current_mae_a": 0.217868,
+      "current_r2": -0.776135,
+      "power_mae_w": 4.674864
     },
     {
       "held_out_date": "2026-07-22",
       "rows": 5905,
-      "voltage_mae_v": 2.132577,
-      "voltage_r2": -3.492451,
-      "current_mae_a": 0.175124,
-      "current_r2": -0.000179,
-      "power_mae_w": 4.571484
+      "voltage_mae_v": 2.21193,
+      "voltage_r2": -3.771505,
+      "current_mae_a": 0.245649,
+      "current_r2": -1.20401,
+      "power_mae_w": 7.352792
     }
   ],
+  "held_out_augmented_current_metrics": {
+    "rows": 5965,
+    "current_mae_a": 0.037229,
+    "current_r2": 0.978546
+  },
+  "output_constraints": {
+    "maximum_voltage_v": 26.5,
+    "maximum_current_a": 1.35,
+    "maximum_power_w": 33.0
+  },
+  "interpretation": {
+    "field_metrics": "Agreement with the supplied Lagos labels on unseen dates.",
+    "augmented_metrics": "Agreement with held-out physics-guided current labels; this is not a real-world accuracy claim.",
+    "prediction": "Expected MPP starting point for a short controller verification search, not proof of the global peak from one lux sensor."
+  },
   "known_limitations": [
-    "Only four independent collection dates are available.",
-    "The 15-row 2026-06-22 fold is too small for a stable per-day R2 score.",
-    "PANEL_CURRENT has no validated relationship with lux, temperature, or timestamp in this collection.",
-    "Predicted power may exceed the nominal 30 W rating because targets are retained without clipping."
+    "Only four independent Lagos collection dates are available.",
+    "The exact 30 W panel datasheet is unavailable, so synthetic electrical limits are explicit surrogate assumptions.",
+    "The local current labels have no validated feature relationship and conflict with low-light photovoltaic behavior.",
+    "One ambient-light sensor cannot identify the spatial shape of partial shade."
   ]
 }

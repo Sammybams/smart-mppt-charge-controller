@@ -16,8 +16,8 @@ def test_health_loads_packaged_model() -> None:
     assert response.status_code == 200
     assert response.json() == {
         "status": "ok",
-        "version": "0.2.0",
-        "model": "Lagos 30 W manual PV collection",
+        "version": "0.3.0",
+        "model": "Hybrid Lagos field + lux-domain 30 W physics model",
     }
 
 
@@ -61,7 +61,7 @@ def test_out_of_collection_range_is_reported() -> None:
     response = client.post(
         "/predict",
         json={
-            "light_lux": 100_000,
+            "light_lux": 150_000,
             "temperature_c": 38.5,
             "timestamp": "2026-07-22T07:00:00+01:00",
         },
@@ -72,3 +72,19 @@ def test_out_of_collection_range_is_reported() -> None:
     assert body["within_training_range"] is False
     assert len(body["warnings"]) == 2
     assert body["max_power_point"]["power_w"] > 0
+
+
+def test_bh1750_standard_range_warning_is_reported() -> None:
+    response = client.post(
+        "/predict",
+        json={
+            "light_lux": 65_000,
+            "temperature_c": 38.5,
+            "timestamp": "2026-07-22T12:30:00+01:00",
+        },
+    )
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["within_training_range"] is False
+    assert "BH1750 standard range" in body["warnings"][0]

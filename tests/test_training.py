@@ -1,15 +1,17 @@
 import joblib
 
-from smart_mppt.augmentation import DEFAULT_AUGMENTED_PATH
+from smart_mppt.augmentation import generate_augmented_samples
 from smart_mppt.manual_dataset import DEFAULT_DATASET_PATH
 from smart_mppt.training import train
 
 
 def test_training_uses_day_isolated_validation(tmp_path) -> None:
     model_path = tmp_path / "model.joblib"
+    augmented_path = tmp_path / "augmented.csv"
+    generate_augmented_samples(2_000).to_csv(augmented_path, index=False)
     report = train(
         dataset_path=DEFAULT_DATASET_PATH,
-        augmented_path=DEFAULT_AUGMENTED_PATH,
+        augmented_path=augmented_path,
         model_path=model_path,
         report_path=tmp_path / "report.json",
     )
@@ -24,6 +26,7 @@ def test_training_uses_day_isolated_validation(tmp_path) -> None:
     assert report["collection_days"] == 4
     assert len(report["field_per_day_metrics"]) == 4
     assert report["field_leave_one_day_out_metrics"]["voltage_mae_v"] < 2.5
-    assert report["augmented_training_rows"] == 30_000
-    assert "Monotonic" in report["model_type"]["current"]
+    assert report["augmented_training_rows"] == 2_000
+    assert "physics model" in report["model_type"]["current"]
+    assert artifact["current_physics_blend"] == 0.2
     assert artifact["output_constraints"]["maximum_power_w"] == 33

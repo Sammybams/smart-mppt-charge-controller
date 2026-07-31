@@ -13,7 +13,8 @@ import numpy as np
 import pandas as pd
 
 from smart_mppt.time_features import (
-    calendar_features_for_timestamp,
+    BH1750_STANDARD_MAX_LUX,
+    environmental_features_for_timestamp,
     to_lagos_local,
 )
 
@@ -36,7 +37,7 @@ class StartupMeasurement:
             "light_lux": self.light_lux,
             "log_light_lux": float(np.log1p(self.light_lux)),
             "temperature_c": self.temperature_c,
-            **calendar_features_for_timestamp(self.timestamp),
+            **environmental_features_for_timestamp(self.timestamp, self.light_lux),
         }
 
 
@@ -60,16 +61,30 @@ class MPPPredictor:
                 f"Model artifact not found at {model_path}. Run scripts/train_model.py."
             )
         artifact = joblib.load(model_path)
-        if artifact.get("artifact_version") != 2:
+        if artifact.get("artifact_version") != 3:
             raise ValueError(
                 "Unsupported model artifact version; retrain with scripts/train_model.py"
             )
         self.voltage_model = artifact["voltage_model"]
         self.current_model = artifact["current_model"]
-        self.feature_columns: list[str] = artifact["feature_columns"]
-        self.input_ranges: dict[str, dict[str, float]] = artifact["input_ranges"]
+        self.voltage_feature_columns: list[str] = artifact[
+            "voltage_feature_columns"
+        ]
+        self.current_feature_columns: list[str] = artifact[
+            "current_feature_columns"
+        ]
+        self.input_ranges: dict[str, dict[str, float]] = artifact[
+            "supported_ranges"
+        ]
+        self.collected_ranges: dict[str, dict[str, float]] = artifact[
+            "collected_ranges"
+        ]
         self.dataset: str = artifact["dataset"]
         self.panel_rating_w: float = artifact["panel_rating_w"]
+        self.output_constraints: dict[str, float] = artifact["output_constraints"]
+        self.current_local_anchor_a: float = artifact["current_local_anchor_a"]
+        self.current_physics_blend: float = artifact["current_physics_blend"]
+        self.current_dark_gate_lux: float = artifact["current_dark_gate_lux"]
 
     def _range_warnings(self, measurement: StartupMeasurement) -> tuple[str, ...]:
         local = to_lagos_local(measurement.timestamp)
@@ -88,21 +103,58 @@ class MPPPredictor:
             maximum = limits["maximum"]
             if not minimum <= value <= maximum:
                 warnings.append(
-                    f"{name}={value:g} is outside the collected range "
+                    f"{name}={value:g} is outside the supported range "
                     f"[{minimum:g}, {maximum:g}]"
                 )
+        if measurement.light_lux >= 0.95 * BH1750_STANDARD_MAX_LUX:
+            warnings.append(
+                "light_lux is near or above the BH1750 standard range; "
+                "verify that extended-range sensor settings are enabled"
+            )
         return tuple(warnings)
 
     def predict(self, measurement: StartupMeasurement) -> Prediction:
         features = measurement.as_features()
-        frame = pd.DataFrame([features], columns=self.feature_columns)
-        voltage = max(0.0, float(self.voltage_model.predict(frame)[0]))
-        current = max(0.0, float(self.current_model.predict(frame)[0]))
+        frame = pd.DataFrame([features])
+        voltage = float(
+            self.voltage_model.predict(frame[self.voltage_feature_columns])[0]
+        )
+        physics_current = float(
+            self.current_model.predict(frame[self.current_feature_columns])[0]
+        )
+        daylight_gate = 1 - np.exp(
+            -measurement.light_lux / self.current_dark_gate_lux
+        )
+        current = float(
+            daylight_gate
+            * (
+                (1 - self.current_physics_blend) * self.current_local_anchor_a
+                + self.current_physics_blend * max(0, physics_current)
+            )
+        )
+        voltage = float(
+            np.clip(
+                voltage,
+                0,
+                self.output_constraints["maximum_voltage_v"],
+            )
+        )
+        current = float(
+            np.clip(
+                current,
+                0,
+                self.output_constraints["maximum_current_a"],
+            )
+        )
+        power = voltage * current
+        if power > self.output_constraints["maximum_power_w"] and voltage > 0:
+            current = self.output_constraints["maximum_power_w"] / voltage
+            power = voltage * current
         warnings = self._range_warnings(measurement)
         return Prediction(
             voltage=round(voltage, 3),
             current=round(current, 3),
-            power=round(voltage * current, 3),
+            power=round(power, 3),
             within_training_range=not warnings,
             warnings=warnings,
         )

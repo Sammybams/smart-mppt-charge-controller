@@ -52,12 +52,13 @@ CURRENT_FEATURE_COLUMNS = [
 ]
 TARGET_COLUMNS = ["max_power_voltage_v", "max_power_current_a"]
 RANDOM_SEED = 42
-CURRENT_AUGMENTATION_WEIGHT = 0.05
+CURRENT_PHYSICS_BLEND = 0.20
+CURRENT_DARK_GATE_LUX = 250.0
 
 
 def _build_voltage_model() -> RandomForestRegressor:
     return RandomForestRegressor(
-        n_estimators=80,
+        n_estimators=40,
         min_samples_leaf=8,
         max_features=0.9,
         n_jobs=1,
@@ -78,35 +79,38 @@ def _build_current_model() -> HistGradientBoostingRegressor:
     )
 
 
-def _fit_current_model(
-    local: pd.DataFrame, augmented: pd.DataFrame
-) -> HistGradientBoostingRegressor:
+def _fit_current_model(augmented: pd.DataFrame) -> HistGradientBoostingRegressor:
     model = _build_current_model()
-    features = pd.concat(
-        [local[CURRENT_FEATURE_COLUMNS], augmented[CURRENT_FEATURE_COLUMNS]],
-        ignore_index=True,
+    model.fit(
+        augmented[CURRENT_FEATURE_COLUMNS], augmented[TARGET_COLUMNS[1]]
     )
-    target = pd.concat(
-        [local[TARGET_COLUMNS[1]], augmented[TARGET_COLUMNS[1]]],
-        ignore_index=True,
-    )
-    weights = np.concatenate(
-        [
-            np.ones(len(local)),
-            np.full(len(augmented), CURRENT_AUGMENTATION_WEIGHT),
-        ]
-    )
-    model.fit(features, target, sample_weight=weights)
     return model
+
+
+def _blend_current(
+    physics_current: np.ndarray, light_lux: np.ndarray, local_anchor_a: float
+) -> np.ndarray:
+    daylight_gate = 1 - np.exp(-np.maximum(0, light_lux) / CURRENT_DARK_GATE_LUX)
+    blended = (
+        (1 - CURRENT_PHYSICS_BLEND) * local_anchor_a
+        + CURRENT_PHYSICS_BLEND * np.maximum(0, physics_current)
+    )
+    return daylight_gate * blended
 
 
 def _predict(
     voltage_model: RandomForestRegressor,
     current_model: HistGradientBoostingRegressor,
     frame: pd.DataFrame,
+    current_anchor_a: float,
 ) -> np.ndarray:
     voltage = voltage_model.predict(frame[VOLTAGE_FEATURE_COLUMNS])
-    current = current_model.predict(frame[CURRENT_FEATURE_COLUMNS])
+    physics_current = current_model.predict(frame[CURRENT_FEATURE_COLUMNS])
+    current = _blend_current(
+        physics_current,
+        frame["light_lux"].to_numpy(),
+        current_anchor_a,
+    )
     return np.column_stack([voltage, current])
 
 
@@ -137,8 +141,11 @@ def _evaluate_field_days(
         voltage_model.fit(
             training[VOLTAGE_FEATURE_COLUMNS], training[TARGET_COLUMNS[0]]
         )
-        current_model = _fit_current_model(training, augmented)
-        predicted = _predict(voltage_model, current_model, testing)
+        current_model = _fit_current_model(augmented)
+        current_anchor_a = float(training[TARGET_COLUMNS[1]].median())
+        predicted = _predict(
+            voltage_model, current_model, testing, current_anchor_a
+        )
         actual = testing[TARGET_COLUMNS].to_numpy()
         actual_parts.append(actual)
         predicted_parts.append(predicted)
@@ -159,7 +166,7 @@ def _evaluate_augmented_current(
     testing_mask = rng.random(len(augmented)) < 0.2
     development = augmented.loc[~testing_mask]
     testing = augmented.loc[testing_mask]
-    model = _fit_current_model(local, development)
+    model = _fit_current_model(development)
     predicted = np.maximum(0, model.predict(testing[CURRENT_FEATURE_COLUMNS]))
     actual = testing[TARGET_COLUMNS[1]].to_numpy()
     return {
@@ -223,7 +230,8 @@ def train(
 
     voltage_model = _build_voltage_model()
     voltage_model.fit(local[VOLTAGE_FEATURE_COLUMNS], local[TARGET_COLUMNS[0]])
-    current_model = _fit_current_model(local, augmented)
+    current_model = _fit_current_model(augmented)
+    current_anchor_a = float(local[TARGET_COLUMNS[1]].median())
     collected_ranges, supported_ranges = _input_ranges(local)
 
     artifact = {
@@ -232,6 +240,9 @@ def train(
         "current_model": current_model,
         "voltage_feature_columns": VOLTAGE_FEATURE_COLUMNS,
         "current_feature_columns": CURRENT_FEATURE_COLUMNS,
+        "current_local_anchor_a": current_anchor_a,
+        "current_physics_blend": CURRENT_PHYSICS_BLEND,
+        "current_dark_gate_lux": CURRENT_DARK_GATE_LUX,
         "target_columns": TARGET_COLUMNS,
         "collected_ranges": collected_ranges,
         "supported_ranges": supported_ranges,
@@ -254,7 +265,7 @@ def train(
         "artifact_version": 3,
         "model_type": {
             "voltage": "RandomForestRegressor trained on Lagos field labels",
-            "current": "Monotonic HistGradientBoostingRegressor trained on weighted Lagos and physics-guided labels",
+            "current": "20% monotonic physics model blended with an 80% Lagos median anchor and a low-light gate",
         },
         "random_seed": RANDOM_SEED,
         "local_dataset_sha256": file_sha256(dataset_path),
@@ -263,7 +274,9 @@ def train(
         "scikit_learn_version": sklearn.__version__,
         "local_training_rows": int(len(local)),
         "augmented_training_rows": int(len(augmented)),
-        "current_augmentation_weight_per_row": CURRENT_AUGMENTATION_WEIGHT,
+        "current_local_anchor_a": current_anchor_a,
+        "current_physics_blend": CURRENT_PHYSICS_BLEND,
+        "current_dark_gate_lux": CURRENT_DARK_GATE_LUX,
         "collection_days": int(local["collection_date"].nunique()),
         "collection_dates": sorted(local["collection_date"].unique().tolist()),
         "field_split_policy": "Leave one complete Lagos collection date out per fold",

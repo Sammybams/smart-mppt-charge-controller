@@ -62,8 +62,8 @@ app = FastAPI(
     title="AI Enabled Smart MPPT Charge Controller",
     version=__version__,
     description=(
-        "Predicts a 30 W panel's maximum-power voltage and current once from "
-        "a Lagos light, temperature, and timestamp reading."
+        "Predicts a 30 W panel's expected maximum-power voltage and current "
+        "once from a Lagos BH1750 lux, temperature, and timestamp reading."
     ),
 )
 
