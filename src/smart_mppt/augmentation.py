@@ -10,6 +10,7 @@ import numpy as np
 import pandas as pd
 
 from smart_mppt.dataset import PROCESSED_DIRECTORY, file_sha256
+from smart_mppt.panel import PANEL
 from smart_mppt.time_features import (
     BH1750_STANDARD_MAX_LUX,
     environmental_features,
@@ -23,13 +24,11 @@ DEFAULT_AUGMENTED_METADATA_PATH = (
 RANDOM_SEED = 42
 DEFAULT_SAMPLE_COUNT = 30_000
 
-# The exact panel datasheet is unavailable. These are explicit surrogate
-# values calibrated to the 30 W nameplate and the Lagos voltage scale.
-PANEL_POWER_W = 30.0
-SURROGATE_VMP_V = 24.0
-SURROGATE_IMP_A = PANEL_POWER_W / SURROGATE_VMP_V
-SURROGATE_VOC_V = 26.5
-SURROGATE_ISC_A = 1.35
+PANEL_POWER_W = PANEL.maximum_power_w
+PANEL_VMP_V = PANEL.maximum_power_voltage_v
+PANEL_IMP_A = PANEL.maximum_power_current_a
+PANEL_VOC_V = PANEL.open_circuit_voltage_v
+PANEL_ISC_A = PANEL.short_circuit_current_a
 CURRENT_TEMPERATURE_COEFFICIENT = 0.0006
 VOLTAGE_TEMPERATURE_COEFFICIENT = -0.0035
 MAX_REASONABLE_POWER_W = 33.0
@@ -87,7 +86,7 @@ def generate_augmented_samples(
 
     normalized_light = (true_lux / BH1750_STANDARD_MAX_LUX).clip(0, 1.2)
     current = (
-        SURROGATE_IMP_A
+        PANEL_IMP_A
         * normalized_light**0.92
         * (1 + CURRENT_TEMPERATURE_COEFFICIENT * (temperature - 25.0))
     )
@@ -106,12 +105,12 @@ def generate_augmented_samples(
         * (0.74 + 0.26 * np.log1p(9 * normalized_light) / np.log(10))
     ).clip(0, 1.04)
     voltage = (
-        SURROGATE_VMP_V
+        PANEL_VMP_V
         * voltage_light_factor
         * (1 + VOLTAGE_TEMPERATURE_COEFFICIENT * (temperature - 25.0))
         * bypass_fraction
-    ).clip(0, SURROGATE_VOC_V)
-    current = current.clip(0, SURROGATE_ISC_A)
+    ).clip(0, PANEL_VOC_V)
+    current = current.clip(0, PANEL_ISC_A)
 
     power = voltage * current
     excessive = power > MAX_REASONABLE_POWER_W
@@ -158,13 +157,15 @@ def prepare_augmented_dataset(
             "Provide physically varying current and partial-shading examples "
             "while preserving the deployed lux input."
         ),
-        "surrogate_panel": {
+        "panel_nameplate": {
+            "manufacturer": PANEL.manufacturer,
+            "model": PANEL.model,
             "rated_power_w": PANEL_POWER_W,
-            "vmp_v": SURROGATE_VMP_V,
-            "imp_a": SURROGATE_IMP_A,
-            "voc_v": SURROGATE_VOC_V,
-            "isc_a": SURROGATE_ISC_A,
-            "status": "Assumed from the 30 W rating and Lagos voltage scale; replace when the exact panel datasheet is available.",
+            "vmp_v": PANEL_VMP_V,
+            "imp_a": PANEL_IMP_A,
+            "voc_v": PANEL_VOC_V,
+            "isc_a": PANEL_ISC_A,
+            "status": "Read from the supplied AP-PM-30W panel label.",
         },
         "assumptions": [
             "BH1750 input variation is sampled within plus/minus 20 percent.",
@@ -172,6 +173,7 @@ def prepare_augmented_dataset(
             "Cloud and shade transmission spans 1 to 115 percent of the clear reference.",
             "Bypass branches represent expected one-third and two-thirds voltage regions.",
             "Maximum synthetic power is limited to 33 W.",
+            "Temperature coefficients remain engineering assumptions because they are not printed on the panel label.",
         ],
         "dataset_sha256": file_sha256(dataset_path),
         "columns": frame.columns.tolist(),

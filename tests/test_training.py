@@ -29,4 +29,8 @@ def test_training_uses_day_isolated_validation(tmp_path) -> None:
     assert report["augmented_training_rows"] == 2_000
     assert "physics model" in report["model_type"]["current"]
     assert artifact["current_physics_blend"] == 0.2
-    assert artifact["output_constraints"]["maximum_power_w"] == 33
+    assert artifact["output_constraints"] == {
+        "maximum_voltage_v": 23.16,
+        "maximum_current_a": 1.67,
+        "maximum_power_w": 33.0,
+    }

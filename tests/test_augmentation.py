@@ -36,4 +36,8 @@ def test_augmentation_writes_assumptions(tmp_path) -> None:
     assert len(pd.read_csv(dataset_path)) == 100
     assert metadata["rows"] == 100
     assert metadata["light_unit"] == "lux"
-    assert metadata["surrogate_panel"]["rated_power_w"] == 30
+    assert metadata["panel_nameplate"]["model"] == "AP-PM-30W"
+    assert metadata["panel_nameplate"]["vmp_v"] == 19.3
+    assert metadata["panel_nameplate"]["imp_a"] == 1.56
+    assert metadata["panel_nameplate"]["voc_v"] == 23.16
+    assert metadata["panel_nameplate"]["isc_a"] == 1.67

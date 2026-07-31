@@ -17,8 +17,8 @@ from sklearn.model_selection import LeaveOneGroupOut
 from smart_mppt.augmentation import (
     DEFAULT_AUGMENTED_PATH,
     MAX_REASONABLE_POWER_W,
-    SURROGATE_ISC_A,
-    SURROGATE_VOC_V,
+    PANEL_ISC_A,
+    PANEL_VOC_V,
     prepare_augmented_dataset,
 )
 from smart_mppt.dataset import PROJECT_ROOT, file_sha256
@@ -251,8 +251,8 @@ def train(
         "light_unit": "lux",
         "dataset": "Hybrid Lagos field + lux-domain 30 W physics model",
         "output_constraints": {
-            "maximum_voltage_v": SURROGATE_VOC_V,
-            "maximum_current_a": SURROGATE_ISC_A,
+            "maximum_voltage_v": PANEL_VOC_V,
+            "maximum_current_a": PANEL_ISC_A,
             "maximum_power_w": MAX_REASONABLE_POWER_W,
         },
     }
