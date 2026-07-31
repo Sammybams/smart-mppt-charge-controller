@@ -1,304 +1,280 @@
-# Lagos 30 W model: training and runtime pipeline
+# How training and prediction work
 
-This document records every material transformation from the supplied manual
-CSV to the prediction returned by the API.
+This document explains the full process in simple steps.
 
-## 1. Objective and scope
+## 1. The input and output
 
-The current owner-confirmed contract is:
+The deployed input stays exactly as requested:
 
-| Meaning | Source/API field | Unit | Role |
-| --- | --- | --- | --- |
-| Light sensor value | `LIGHT` / `light_lux` | lux | Input |
-| Ambient temperature | `TEMPERATURE` / `temperature_c` | degrees Celsius | Input |
-| Lagos measurement time | `TIME` / `timestamp` | datetime | Input |
-| Expected MPP panel voltage | `PANEL_VOLTAGE` / `voltage_v` | volts | Target/output |
-| Expected MPP panel current | `PANEL_CURRENT` / `current_a` | amperes | Target/output |
+| API input | Meaning |
+| --- | --- |
+| `light_lux` | Lux from the GY-302/BH1750 sensor |
+| `temperature_c` | Ambient temperature |
+| `timestamp` | Date and time of the reading |
 
-Battery columns, unnamed columns, and free-text explanation are excluded. The
-model is specific to the measured 30 W panel and local sensor arrangement.
+The output is:
 
-## 2. Raw data audit
+| API output | Meaning |
+| --- | --- |
+| `voltage_v` | Expected maximum-power panel voltage |
+| `current_a` | Expected maximum-power panel current |
+| `power_w` | Predicted voltage multiplied by predicted current |
 
-The immutable source is `data/Manual_Collection.csv` with SHA-256:
+The API does not ask for W/m2. Lux is used from beginning to end.
+
+## 2. The real Lagos data
+
+The original file is `data/Manual_Collection.csv`. It contains 12,477 rows
+from a 30 W panel measured in Lagos on four days.
+
+The owner confirmed this mapping:
+
+```text
+LIGHT         -> input lux
+TEMPERATURE   -> input temperature
+TIME          -> input timestamp
+PANEL_VOLTAGE -> target MPP voltage
+PANEL_CURRENT -> target MPP current
+```
+
+Battery fields and unnamed columns are not used.
+
+The original file is kept unchanged. Its SHA-256 is:
 
 ```text
 09ce21869b7133c6319af2a574daf190a3049abcf0566d383d92a755c7b9b734
 ```
 
-It contains 12,477 received rows on four dates:
+## 3. Cleaning the real data
 
-| Date | Raw rows | Approximate period represented |
-| --- | ---: | --- |
-| 2026-06-22 | 15 | 19:40-19:43 |
-| 2026-06-23 | 1,623 | 12:53-19:13 |
-| 2026-07-21 | 4,434 | 13:10-19:02 |
-| 2026-07-22 | 6,405 | 08:08-15:44 |
+Run:
 
-Observed selected-column ranges before modeling are approximately:
+```bash
+python scripts/prepare_manual_dataset.py
+```
 
-| Field | Minimum | Maximum |
-| --- | ---: | ---: |
-| Light | 10.83 lux | 54,612.50 lux |
-| Temperature | 28.5 C | 53.8 C |
-| Target voltage | 2.71 V | 26.11 V |
-| Target current | 0.80 A | 1.49 A |
+The script:
 
-The collection has duplicate rows, repeated timestamps, and occasional input
-order reversals of one or two seconds. It has no missing numeric values in the
-selected columns.
+1. keeps only the five fields listed above;
+2. removes 294 exact duplicates;
+3. joins conflicting readings from the same second by taking their median;
+4. sorts everything by time;
+5. treats the timestamps as Lagos local time; and
+6. calculates the time and sunlight features used by the model.
 
-The target current has exactly 70 unique values at 0.01 A increments. Its
-distribution and weak feature correlations are why current performance is
-reported separately from voltage rather than hidden inside one average score.
+The result contains 11,581 rows.
 
-## 3. Deterministic preparation
+No real target is silently replaced, clipped, or deleted. Output limits are
+applied later when the API makes a prediction.
 
-`scripts/prepare_manual_dataset.py` calls
-`smart_mppt.manual_dataset.prepare_manual_dataset`.
+## 4. Features made from lux and time
 
-The steps are:
+The model receives the original lux and temperature. It also receives useful
+values calculated from them:
 
-1. Read the original CSV without editing it.
-2. Select only `TIME`, `LIGHT`, `TEMPERATURE`, `PANEL_VOLTAGE`, and
-   `PANEL_CURRENT`.
-3. Rename them to explicit unit-bearing training names.
-4. Remove exact duplicates across those five selected fields.
-5. Parse `TIME` with the exact `%m/%d/%Y %H:%M:%S` format.
-6. Parse all four physical fields as numeric and reject non-finite or negative
-   values.
-7. Group records sharing the same second and take the median of each numeric
-   field. Median aggregation is robust to conflicting duplicate readings and
-   creates one unambiguous label per timestamp.
-8. Sort ascending by timestamp; this also corrects minor logger-order
-   reversals.
-9. Start a new session after any gap longer than five minutes.
-10. Generate time and light features described below.
-11. Calculate reference target power as target voltage times target current.
+- `log(1 + lux)`, which makes low-light differences easier to learn;
+- time of day represented as sine and cosine;
+- day of year represented as sine and cosine;
+- approximate sun height above Lagos;
+- a daylight factor; and
+- lux compared with the light expected at that sun height.
 
-Exact row accounting:
+Sine and cosine are used because time is circular. For example, 23:59 and
+00:01 should be close together.
 
-| Stage | Rows |
+Sun height is calculated from the date, local time, and Lagos coordinates. It
+does not require an internet connection.
+
+The lux comparison is only a context feature. It is not presented as an exact
+conversion from lux to W/m2.
+
+## 5. Why generated data is needed
+
+The real voltage has a useful relationship with the inputs. The real current
+column does not. It contains values from 0.80 A to 1.49 A, but those values are
+almost unrelated to lux, temperature, or time.
+
+A model trained only on that current column learned no useful rule. The safest
+old model returned the same median current for every request.
+
+The new version adds generated examples so current can respond to light in a
+reasonable way.
+
+## 6. How generated data is made
+
+Run:
+
+```bash
+python scripts/generate_augmented_dataset.py
+```
+
+This creates 30,000 repeatable examples. Random seed 42 is fixed, so running
+the script again creates the same data.
+
+Each example contains:
+
+- a Lagos timestamp;
+- sun height at that time;
+- clear, cloudy, or strongly shaded light;
+- simulated BH1750 measurement variation;
+- a temperature between 24 C and 58 C;
+- a possible bypass-diode voltage region; and
+- expected MPP voltage, current, and power.
+
+The generator uses lux as the saved input. It does not change the deployed API
+to W/m2.
+
+Because the exact panel datasheet is missing, these surrogate values are used:
+
+| Assumption | Value |
 | --- | ---: |
-| Received | 12,477 |
-| Exact selected-field duplicates removed | 294 |
-| Rows after exact deduplication | 12,183 |
-| Surplus same-second rows median-aggregated | 602 |
-| Final prepared rows | 11,581 |
+| Rated power | 30 W |
+| Nominal MPP voltage | 24.0 V |
+| Nominal MPP current | 1.25 A |
+| Open-circuit voltage limit | 26.5 V |
+| Short-circuit current limit | 1.35 A |
+| Maximum allowed generated power | 33 W |
 
-There are 601 timestamp groups containing multiple non-identical selected
-records. No target clipping, 30 W clipping, mean imputation, random noise, or
-synthetic oversampling is performed.
+The voltage scale comes from the Lagos readings. Current is calculated from
+the 30 W rating. These values are written clearly in the generated metadata so
+they can be replaced when the panel datasheet is found.
 
-## 4. Time and input feature engineering
+The BH1750 input is varied by up to about 20% to make the model less dependent
+on one perfectly mounted sensor.
 
-The final feature order is:
+Partial shade is represented with full, two-thirds, and one-third voltage
+regions. This helps the model see several possible peak areas. It still cannot
+know the exact shadow shape from one lux value.
 
-```text
-light_lux
-log_light_lux
-temperature_c
-hour_sin
-hour_cos
-day_of_year_sin
-day_of_year_cos
-```
+## 7. The two final models
 
-`log_light_lux = log(1 + light_lux)` gives the tree model both the original
-sensor scale and a compressed representation of changes at lower light.
+### Voltage
 
-Clock time is cyclic. Seconds since midnight are converted to an angle and
-then represented by sine and cosine:
+Voltage uses a random forest with 40 trees. It is trained only on real Lagos
+voltage labels. Generated voltage does not overwrite what was measured from
+the actual panel.
 
-```text
-daily_angle = 2 * pi * seconds_since_midnight / 86400
-hour_sin = sin(daily_angle)
-hour_cos = cos(daily_angle)
-```
+### Current
 
-This makes 23:59 close to 00:01 instead of opposite ends of a linear scale.
-Day of year is encoded the same way using 365.2425 days and includes the
-fractional day. This allows a June morning and a December morning to carry
-different seasonal context without treating December 31 and January 1 as far
-apart.
+A monotonic gradient-boosting model learns current from the generated data.
+“Monotonic” means that its main lux relationship is not allowed to randomly
+fall when lux increases.
 
-Training timestamps are naive values explicitly interpreted as Lagos local
-time. Runtime timestamps with an offset are converted to `Africa/Lagos`; naive
-runtime values are assigned that timezone.
-
-Timestamp is contextual, not a substitute for light. Measurements at similar
-times on different days show very different light patterns, as expected from
-clouds and shade. Lux supplies current conditions; clock and season supply
-broad solar-cycle context.
-
-## 5. Why no rolling history or LSTM is used
-
-The raw sampling intervals are irregular and differ substantially by day. More
-importantly, 11,581 rows come from only four dates. A sequence model trained on
-overlapping windows would see many nearly identical samples from the same few
-trajectories. A random row/window split would then leak the same day into both
-sides and produce an optimistic score.
-
-The device requirement is also a one-time startup call. Requiring a historical
-window would change that contract and complicate cold-start operation.
-
-For those reasons, this version uses time-aware tabular features and validates
-on whole unseen days. An LSTM becomes reasonable only after collecting many
-independent days across seasons and operating conditions, with a defined
-history buffer available on the controller.
-
-## 6. Treatment of public data
-
-The legacy UCP source and reproducible downloader are retained. UCP uses solar
-irradiance in W/m2 and represents a simulated 250 W, 60-cell panel. The Lagos
-sensor reports illuminance in lux for a physical 30 W panel.
-
-Lux describes human-visible illuminance and W/m2 describes incident radiant
-power. Their ratio changes with spectrum, clouds, sun angle, sensor response,
-and calibration. Nameplate normalization can make voltage/current/power
-dimensionless, but it cannot create the missing lux-to-irradiance calibration
-or make the panel electrical characteristics identical. Therefore UCP is not
-concatenated with the production training table.
-
-A 2026 Scientific Reports study is closer in rating: it used an ET-M53630WW
-30 W panel and recorded 55 I-V curves at five-minute intervals. However, it was
-a different, aged panel in Oujda, Morocco, used W/m2 irradiance, and studied
-uniform conditions. It is a good pattern for future data collection, not a
-drop-in source of labels for this exact sensor and panel.
-
-## 7. Leakage-resistant evaluation
-
-`LeaveOneGroupOut` uses `collection_date` as its group. Four evaluation fits
-are made. Each holds out one complete date and trains on the other three. No
-record from the held-out date, including immediately adjacent sensor readings,
-can enter that fold's training data.
-
-The aggregate metric concatenates every fold's out-of-fold prediction before
-calculation, so larger days contribute in proportion to their row count. The
-per-day metrics remain in `models/training_report.json`. The 2026-06-22 fold
-contains only 15 late-evening readings; its R2 is mathematically valid but not
-a stable standalone estimate.
-
-## 8. Model comparison and selection
-
-Candidate voltage estimators included random forest, Extra Trees, histogram
-gradient boosting, and a constant baseline. Random forest had the best overall
-day-isolated voltage MAE in the comparison.
-
-The voltage estimator is `RandomForestRegressor` with:
+At prediction time, current is blended like this:
 
 ```text
-n_estimators = 80
-min_samples_leaf = 8
-max_features = 0.9
-n_jobs = 1
-random_state = 42
+final current = 80% Lagos median anchor + 20% generated-data current
 ```
 
-The current candidates did not beat a median baseline under leave-one-day-out
-validation. The final current estimator is consequently a
-`DummyRegressor(strategy="median")`. It still produces the requested current,
-but accurately represents the evidence: the current sensor target currently
-has no demonstrated generalizable mapping from lux, temperature, and time.
+The Lagos anchor is 1.15 A. A low-light gate then moves the result toward zero
+when lux is very small.
 
-This per-target choice is safer than a multi-output neural model whose good
-voltage behavior could obscure uninformative current predictions.
+This is the compromise:
 
-## 9. Evaluation results
+- current changes with lux;
+- real Lagos data remains the main anchor; and
+- assumptions do not control the whole result.
 
-Out-of-fold metrics across all complete-day holdouts are:
+## 8. Testing without time leakage
 
-| Metric | Result |
+The real-data test holds out one complete date at a time. The model trains on
+the other dates and predicts the missing date.
+
+This prevents neighbouring readings from the same day appearing in both the
+training and test sets.
+
+The latest results are:
+
+| Real Lagos check | Result |
 | --- | ---: |
-| Voltage MAE | 1.882936 V |
-| Voltage R2 | 0.649073 |
-| Current MAE | 0.173991 A |
-| Current R2 | -0.000220 |
-| Derived power MAE | 4.684770 W |
+| Voltage MAE | 1.724923 V |
+| Voltage R2 | 0.777478 |
+| Current MAE | 0.241653 A |
+| Current R2 | -1.256363 |
+| Derived power MAE | 6.071972 W |
 
-Power for evaluation is calculated consistently as:
+The negative current R2 is important. It says the hybrid current does not
+match the questionable current column well on unseen days. That is expected
+because the new model follows light while the recorded current mostly does not.
 
-```text
-actual_power = target_voltage * target_current
-predicted_power = predicted_voltage * predicted_current
+Twenty percent of generated current examples are also held out:
+
+| Generated-data check | Result |
+| --- | ---: |
+| Current MAE | 0.037229 A |
+| Current R2 | 0.978546 |
+
+This proves that the code learned the generated rule. It does not prove the
+same accuracy on the physical panel.
+
+All exact per-day results are in `models/training_report.json`.
+
+## 9. Building the saved model
+
+Run:
+
+```bash
+python scripts/train_model.py
 ```
 
-The negative-near-zero current R2 means the median does not explain current
-variation. It is not evidence that current prediction is solved. The voltage
-result is useful but also varies by day; the latest-day holdout has 2.132577 V
-MAE and negative R2 because its voltage variance is narrow relative to its
-cross-day shift.
+Training fits the final voltage model on all 11,581 real rows and the current
+physics model on all 30,000 generated rows. It saves:
 
-## 10. Final refit and artifact
+```text
+models/smart_mppt.joblib
+models/training_report.json
+```
 
-After validation metrics are produced, fresh voltage and current estimators are
-fitted on all 11,581 prepared rows. The compressed artifact is written to a
-temporary file and atomically moved to `models/smart_mppt.joblib`.
+Artifact version 3 stores both models, feature order, supported input ranges,
+blend values, safety limits, timezone, panel rating, and dataset names.
 
-Artifact version 2 contains:
+Normal API startup loads this saved file. It does not train again.
 
-- fitted voltage and current estimators;
-- ordered feature and target names;
-- observed lux, temperature, local-hour, and day-of-year ranges;
-- source dataset name, panel rating, light unit, and timezone; and
-- artifact format version.
+## 10. What happens during a prediction
 
-`models/training_report.json` records dataset/model checksums, software
-version, model selection rationale, dates, features, targets, validation
-policy, aggregate and per-day metrics, and known limitations.
+For one `POST /predict` request:
 
-The model is fitted directly to numeric features. Tree models do not require a
-standard scaler, so no z-score normalization is used. `log1p(lux)` is the only
-scale transform.
+1. The API checks the three input values.
+2. It converts the timestamp to Lagos time.
+3. It calculates time, sun-height, and BH1750 context features.
+4. The real-data model predicts voltage.
+5. The generated-data model predicts a physics current.
+6. The physics current is blended with the 1.15 A Lagos anchor.
+7. The low-light gate reduces current when lux is very small.
+8. Voltage is limited to 26.5 V.
+9. Current is limited to 1.35 A.
+10. If voltage times current exceeds 33 W, current is reduced so power is 33 W.
+11. The API returns voltage, current, power, and warnings.
 
-## 11. Runtime transformation
+Lux of 62,258 or more triggers a message that the BH1750 is near its standard
+range. The model supports generated values up to 100,000 lux, but the hardware
+must use a suitable sensor setting to measure them correctly.
 
-For `POST /predict`:
+## 11. What this can and cannot do
 
-1. Pydantic checks types and broad physical limits.
-2. The timestamp is interpreted or converted to Lagos local time.
-3. Lux is transformed with the same `log1p` formula used in training.
-4. The daily and annual cyclic features are generated by the shared
-   `time_features.py` implementation.
-5. Features are ordered exactly as stored in the artifact.
-6. The voltage forest and current median regressor predict independently.
-7. Negative predictions are clamped to zero.
-8. Power is computed from the unrounded predictions.
-9. Outputs are rounded to three decimals.
-10. Lux, temperature, local time, and day of year are checked against observed
-    collection ranges and warnings are returned for extrapolation.
+This model gives a reasonable place for the controller to start searching. It
+does not guarantee the true global maximum from only one lux reading.
 
-The artifact loads once per API process and is cached. Normal requests neither
-download data nor retrain the model, and no LLM or external API is involved.
+One BH1750 measures light at one position. It cannot tell whether one cell,
+half the panel, or the whole panel is shaded. Those cases can have different
+power curves even when the sensor reports the same lux.
 
-## 12. What the target does and does not establish
+The controller should:
 
-The owner confirmed `PANEL_VOLTAGE` and `PANEL_CURRENT` as the expected maximum
-voltage/current outputs, so they are used as supervised labels.
+1. move near the predicted voltage;
+2. check power on both sides; and
+3. try another bypass-diode voltage region if measured power is unexpectedly
+   low.
 
-Nevertheless, one voltage/current pair at a timestamp cannot mathematically
-demonstrate a global maximum on a multi-peak P-V curve. A global label requires
-a contemporaneous curve sweep or another trusted controller/reference that
-searched all relevant peaks. The model therefore estimates the supplied target
-definition and is appropriate for choosing an initial search neighborhood. It
-should not replace the firmware's local verification/search.
+## 12. Best future improvement
 
-## 13. Recommended next collection
+The most useful next data collection is a fast I-V sweep. For each sweep, save:
 
-For a rigorous partial-shading global-MPP model, collect many independent days
-and perform fast sweeps that minimize environmental change during each curve.
-For every sweep store:
+- timestamp;
+- BH1750 lux;
+- ambient and panel temperature;
+- every voltage and current point; and
+- the voltage/current pair with the highest measured power.
 
-- unique sweep ID and precise Lagos timestamp;
-- raw lux and, ideally, a calibrated pyranometer irradiance in W/m2;
-- ambient and rear-panel/cell temperature separately;
-- shade configuration or image-derived shade descriptor when available;
-- every swept panel voltage and current pair;
-- computed power for every point; and
-- the global peak voltage, current, and power selected from the complete sweep.
-
-Also record panel model/specification, sensor model and calibration, converter
-duty cycle, battery/load state, and firmware version. Split future evaluation
-by complete day and, where possible, by shade experiment. Once there are many
-independent days, compare lag/rolling features and sequence models against this
-tabular baseline without changing the test days.
+Also save the exact panel model and datasheet values. With enough complete
+days and real curve sweeps, the synthetic blend can be reduced or removed.

@@ -20,7 +20,7 @@ The project owner confirmed the following interpretation:
 
 | Source column | Meaning | Unit | Model role |
 | --- | --- | --- | --- |
-| `LIGHT` | Light measured by the local sensor | lux | Input |
+| `LIGHT` | Light measured by the GY-302/BH1750 sensor | lux | Input |
 | `TEMPERATURE` | Ambient temperature | degrees Celsius | Input |
 | `TIME` | Local measurement time in Lagos | `M/D/YYYY HH:MM:SS` | Input |
 | `PANEL_VOLTAGE` | Voltage at the maximum-power operating point | volts | Target |
@@ -42,8 +42,11 @@ received, but the owner-confirmed contract above governs the training pipeline.
   limits the current model's attainable accuracy and should be reviewed against
   the sensor/logger implementation.
 - Recorded voltage multiplied by current can exceed the nominal 30 W rating.
-  These readings are preserved rather than silently clipped; validation metrics
-  and runtime range warnings make this visible.
+  The original labels are preserved. Runtime predictions are limited to 33 W.
 - Lux is illuminance, not solar irradiance. It is not directly interchangeable
   with the W/m2 irradiance in the public UCP dataset without a calibrated,
   spectrum- and sensor-specific conversion.
+
+The production current prediction now blends a physics-guided lux model with
+the Lagos median current. This gives a light-responsive result while keeping
+the uncertain generated data at only 20% of the current estimate.

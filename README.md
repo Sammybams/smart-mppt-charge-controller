@@ -1,20 +1,20 @@
 # AI Enabled Smart MPPT Charge Controller
 
-This project provides a one-shot startup prediction for the 30 W photovoltaic
-panel measured in Lagos, Nigeria. The controller sends light, temperature, and
-timestamp once; the API predicts an expected maximum-power-point (MPP) voltage
-and current. Firmware can move near that point and then search locally to the
-left and right.
+This project predicts a good starting point for a 30 W solar panel's maximum
+power point (MPP).
 
-The packaged production model is trained on the supplied
-`data/Manual_Collection.csv`, not on the earlier public UCP model. UCP remains
-in the repository as a reproducible partial-shading research benchmark, but it
-describes a simulated 250 W panel and uses irradiance in W/m2 rather than lux.
-Those measurements are not mixed as though they were equivalent.
+The device sends only three values:
 
-## API contract
+- light from the GY-302/BH1750 sensor, in lux;
+- ambient temperature, in degrees Celsius; and
+- the current date and time.
 
-Send one `POST /predict` request:
+The API returns the expected MPP panel voltage and current. The controller can
+move near that point and do a short search to the left and right.
+
+## Simple example
+
+Send this to `POST /predict`:
 
 ```json
 {
@@ -24,31 +24,97 @@ Send one `POST /predict` request:
 }
 ```
 
-The service returns:
+Example response:
 
 ```json
 {
   "max_power_point": {
-    "voltage_v": 25.829,
-    "current_a": 1.15,
-    "power_w": 29.704
+    "voltage_v": 25.837,
+    "current_a": 1.082,
+    "power_w": 27.946
   },
   "within_training_range": true,
   "warnings": []
 }
 ```
 
-The timestamp should contain its UTC offset. A timestamp without an offset is
-interpreted as Lagos time (`Africa/Lagos`). `power_w` is calculated from the
-unrounded voltage and current predictions; it is not a separately fitted
-target.
+Use a timestamp with a timezone when possible. If no timezone is supplied, the
+API treats it as Lagos time.
 
-The range flag does not guarantee prediction accuracy. It indicates whether
-lux, temperature, local clock time, and day of year fall inside the conditions
-represented in the four collection days. A prediction is still returned for
-an out-of-range request, with a warning for each extrapolated input.
+## How the model works
 
-## Run locally
+The model uses two kinds of training data:
+
+1. **Real Lagos readings.** These teach the model how the actual panel voltage
+   behaves with lux, temperature, and time.
+2. **Generated 30 W examples.** These teach the current model how solar-panel
+   current should change in low light, bright light, clouds, and partial shade.
+
+The generated examples still use lux as their input. The device never needs to
+send irradiance in W/m2.
+
+Time is used to calculate the sun's approximate height above Lagos. This is
+more useful than treating `12:00` as only a number. The same clock time in
+different months can have different sunlight conditions.
+
+The final current is a careful blend:
+
+```text
+80% anchor from the middle Lagos current reading
+20% current from the physics-guided model
+```
+
+A low-light gate reduces current toward zero when lux is very low. This means
+current is no longer a fixed value, but the uncertain generated data cannot
+overpower the real panel data.
+
+## Safety limits
+
+The current panel datasheet is not available, so the model uses clearly marked
+30 W surrogate limits:
+
+- maximum voltage: 26.5 V;
+- maximum current: 1.35 A; and
+- maximum power: 33 W.
+
+The extra 3 W allows a small margin above the nameplate rating. Replace these
+values when the exact panel datasheet is available.
+
+The BH1750 normally measures up to about 65,535 lux. The API warns when a value
+is close to or above that standard range. Configure the sensor's extended
+range if the hardware uses readings above that level.
+
+## What the result means
+
+The result is the **expected best starting point**. It is not proof that the
+point is always the global maximum under every shade pattern.
+
+One light sensor cannot see how shade is spread across individual panel cells.
+Two different shadow shapes can produce the same lux value but different power
+curves. Keep the short controller verification search after moving to the
+predicted voltage.
+
+## Measured results
+
+Testing holds out one complete Lagos day at a time. This is harder and more
+honest than randomly mixing neighbouring readings between training and test
+data.
+
+| Check | Result |
+| --- | ---: |
+| Voltage error on unseen Lagos days | 1.725 V MAE |
+| Voltage R2 | 0.777 |
+| Current error against Lagos current column | 0.242 A MAE |
+| Power error against Lagos columns | 6.072 W MAE |
+| Current error on held-out generated examples | 0.037 A MAE |
+
+The local current column has almost no dependable relationship with lux,
+temperature, or time. The hybrid current deliberately follows light more than
+the old fixed-median model, so its agreement with that column is worse. The
+generated current result checks the implemented assumptions; it is not a claim
+of real-world accuracy.
+
+## Run the API
 
 Python 3.11 is required.
 
@@ -59,134 +125,47 @@ python -m pip install -e '.[dev]'
 smart-mppt-api
 ```
 
-The service listens on `http://localhost:8000`; interactive OpenAPI
-documentation is at `http://localhost:8000/docs`.
+Open `http://localhost:8000/docs` for interactive API documentation.
 
 ```bash
 curl -X POST http://localhost:8000/predict \
   -H 'Content-Type: application/json' \
   --data @examples/startup_request.json
-
-curl http://localhost:8000/health
 ```
 
-If the model is elsewhere, set `SMART_MPPT_MODEL_PATH` to its absolute path.
+## Rebuild the data and model
 
-## Run with Docker
-
-```bash
-docker build -t smart-mppt .
-docker run --rm -p 8000:8000 smart-mppt
-```
-
-## Reproduce preparation and training
-
-The original manual CSV is committed unchanged. Rebuild all generated data and
-the model with:
+Run these commands in order:
 
 ```bash
 python scripts/prepare_manual_dataset.py
+python scripts/generate_augmented_dataset.py
 python scripts/train_model.py
 ```
 
-Preparation produces ignored, reproducible files:
+The original CSV is never changed. Generated CSV files are ignored by Git.
+The finished model and its report are saved in `models/`.
 
-- `data/processed/lagos_30w_training.csv`
-- `data/processed/lagos_30w_training.metadata.json`
+More detail is available in:
 
-Training replaces the committed runtime artifacts:
+- [`data/MANUAL_COLLECTION.md`](data/MANUAL_COLLECTION.md) — the real data;
+- [`data/AUGMENTATION.md`](data/AUGMENTATION.md) — the generated data;
+- [`docs/TRAINING_PIPELINE.md`](docs/TRAINING_PIPELINE.md) — all training and
+  prediction steps; and
+- [`models/training_report.json`](models/training_report.json) — exact metrics
+  and checksums from the latest training run.
 
-- `models/smart_mppt.joblib`
-- `models/training_report.json`
-
-The detailed source audit, preprocessing rules, time encoding, model selection,
-validation, metrics, limitations, and runtime transformation are documented in
-[`docs/TRAINING_PIPELINE.md`](docs/TRAINING_PIPELINE.md). The local data's
-provenance and field contract are in
-[`data/MANUAL_COLLECTION.md`](data/MANUAL_COLLECTION.md).
-
-## Why this is time-aware, but not an LSTM
-
-The collection contains 11,581 prepared timestamp readings but only four
-independent days. Adjacent readings are highly related, so counting rows alone
-would greatly overstate the amount of sequence evidence. An LSTM could easily
-memorize those few daily traces and appear strong under a random row split.
-
-The implemented model instead uses:
-
-- cyclic local time-of-day features;
-- cyclic day-of-year features;
-- lux and `log1p(lux)`;
-- ambient temperature; and
-- leave-one-complete-day-out validation.
-
-This preserves the useful daily/seasonal context while keeping the API truly
-one-shot—no hidden recurrent state or mandatory history window is needed.
-
-## Current measured performance
-
-Across leave-one-day-out predictions, where an entire date is unseen during
-each fold:
-
-| Metric | Result |
-| --- | ---: |
-| MPP voltage MAE | 1.882936 V |
-| MPP voltage R2 | 0.649073 |
-| MPP current MAE | 0.173991 A |
-| MPP current R2 | -0.000220 |
-| Derived power MAE | 4.684770 W |
-
-Voltage has a learnable relationship in the supplied data. Current does not:
-the current values are nearly uniformly quantized from 0.80 A to 1.49 A and no
-tested feature model beat a day-isolated median baseline. The shipped current
-regressor therefore returns the training median instead of fitting noise. This
-is an explicit limitation, not a hidden success claim.
-
-## Does it solve global MPPT under partial shading?
-
-It implements the requested startup predictor using the field meanings
-confirmed by the project owner. It can give the controller a useful initial
-location and reduce a search from zero.
-
-It does **not yet prove** that the returned point is the global maximum under
-arbitrary partial shading. Each manual row contains one confirmed target
-voltage/current pair, not a contemporaneous full I-V or P-V sweep containing
-all local peaks. A supervised model can only learn the supplied labels; it
-cannot verify that an unmeasured, higher peak did not exist.
-
-For rigorous global-peak training, collect repeated fast I-V sweeps at varied
-shading patterns and store, per sweep, lux or calibrated irradiance,
-temperature, timestamp, every voltage/current point, and the selected global
-peak. Until then, firmware should use the prediction as a starting point and
-retain the requested left/right safety search.
-
-## Public datasets and why they are not merged
-
-The original [UCP dataset](https://doi.org/10.17632/z93gzbptf7.1) contains
-uniform and partial-shading curves with identified peaks, but it is a simulated
-250 W, 60-cell panel dataset with irradiance in W/m2. Normalizing voltage,
-current, and power by nameplate ratings does not solve the missing calibrated
-lux-to-irradiance mapping or different panel topology.
-
-A closer published study uses a real 30 W ET-M53630WW panel and records
-irradiance, temperature, voltage, and current across 55 I-V sweeps. It is useful
-for designing the next Lagos collection, but it uses W/m2, a different aged
-panel in Morocco, and uniform irradiance; merging it would introduce a domain
-shift rather than reliably augment this sensor-panel pair. See the
-[Scientific Reports study](https://doi.org/10.1038/s41598-026-39626-w).
-
-An LLM is not suitable for the numeric control path. It cannot provide the
-deterministic, low-latency, calibrated regression needed by an embedded MPPT
-controller. A small tabular model is the appropriate tool for the data
-currently available.
-
-## Test
+## Run tests
 
 ```bash
 PYTEST_DISABLE_PLUGIN_AUTOLOAD=1 python -m pytest -q
 ```
 
-The environment variable prevents unrelated globally installed pytest plugins
-from affecting the project suite. Tests cover raw-data preparation, timestamp
-encoding, day-isolated training, packaged inference, API validation, exact
-examples, and range warnings.
+## Why no LSTM or LLM?
+
+There are many rows but only four separate collection days. An LSTM could
+memorize those days instead of learning a general rule. The present tree
+models are smaller, faster, easier to test, and work from one startup reading.
+
+An LLM is also unnecessary. This is a numeric control problem that needs fast,
+repeatable results without an internet connection.
